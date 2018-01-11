@@ -136,6 +136,10 @@ class CollapsedStochasticBlock(CollapsedMixture):
 
     @tfmethod(2)
     def logp(self, Z, X):
+        #unpack from singleton list
+        if len(Z.shape)>2:
+            Z = Z[0]
+
         membership = tf.reduce_sum(Z, axis=0, keep_dims=True)
         edgecounts = tf.matmul(tf.matmul(Z, X, transpose_a=True), Z)
         notedgecounts = tf.matmul(membership, membership, transpose_b=True) - edgecounts

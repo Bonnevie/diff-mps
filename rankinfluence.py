@@ -11,13 +11,14 @@ from collapsedclustering import CollapsedStochasticBlock
 from tensornets import MPS, Canonical, symmetrynorm
 from edward.models import MultivariateNormalTriL, Dirichlet, WishartCholesky, ParamMixture
 
-N = 5
+N = 34
 K = 2
-maxranks = [1, 5]
+maxranks = [1, 2, 3]
 nsamples=5
-steps = 10000
+steps = 20000
+runs = 3
 
-folder = 'testN34K2R5'
+folder = 'testN34K2R123'
 #cap core rank at R
 
 np.random.seed(1)
@@ -71,7 +72,7 @@ opt = {}
 step = {}
 #equalize_ops = [tf.no_op()]
 with tf.name_scope("model"):
-    p = CollapsedStochasticBlock(N, K)
+    p = CollapsedStochasticBlock(N, K, alpha=100, a=10, b=10)
     Xt = tf.constant(X)
     print("building models...")
     for R in tqdm.tqdm(maxranks):
@@ -100,7 +101,7 @@ with tf.name_scope("model"):
     with tf.name_scope("optimization"):
         sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
         print("Starting optimization.")
-        for run in tqdm.tqdm(range(5), desc="Run", total=5):
+        for run in tqdm.tqdm(range(runs), desc="Run", total=5):
             writer = tf.summary.FileWriter('./train/' + folder + 'run' + str(run), sess.graph)
             sess.run(init)
             #sess.run(equalize)

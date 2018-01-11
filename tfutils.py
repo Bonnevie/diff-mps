@@ -1,24 +1,32 @@
 import tensorflow as tf
 from functools import wraps
 
-def tffunc(num_tensors):
+def tffunc(num_tensors, list_tensors=None):
     def tffunc_apply(func):
         @wraps(func)
         def newfunc(*args, output_collections=(), name=None, **kwargs):
             with tf.name_scope(name, func.__name__):
-                tensors = [map_nlist(x, tf.convert_to_tensor) for x in args[:num_tensors]]
+                if list_tensors:
+                    tensors = [map_nlist(x, tf.convert_to_tensor) for x in args[:list_tensors]]
+                    tensors += [tf.convert_to_tensor(x) for x in args[list_tensors:num_tensors]]
+                else:
+                    tensors = [tf.convert_to_tensor(x) for x in args[:num_tensors]]
                 result = func(*tensors, *args[num_tensors:], **kwargs)
                 tf.add_to_collection(output_collections, result)
                 return result
         return newfunc
     return tffunc_apply
 
-def tfmethod(num_tensors):
+def tfmethod(num_tensors, list_tensors=None):
     def tffunc_apply(func):
         @wraps(func)
         def newfunc(self, *args, output_collections=(), name=None, **kwargs):
             with tf.name_scope(name, func.__name__):
-                tensors = [map_nlist(x, tf.convert_to_tensor) for x in args[:num_tensors]]
+                if list_tensors:
+                    tensors = [map_nlist(x, tf.convert_to_tensor) for x in args[:list_tensors]]
+                    tensors += [tf.convert_to_tensor(x) for x in args[list_tensors:num_tensors]]
+                else:
+                    tensors = [tf.convert_to_tensor(x) for x in args[:num_tensors]]
                 result = func(self, *tensors, *args[num_tensors:], **kwargs)
                 tf.add_to_collection(output_collections, result)
                 return result
