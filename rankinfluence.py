@@ -70,38 +70,39 @@ softelbo = {}
 opt = {}
 step = {}
 #equalize_ops = [tf.no_op()]
-with tf.name_scope("model"):
-    p = CollapsedStochasticBlock(N, K)
-    Xt = tf.constant(X)
-    print("building models...")
-    for R in tqdm.tqdm(maxranks):
-        with tf.name_scope("rank"+str(R)):
-            ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
-            cores[R] = Canonical(N, K, ranks)
-            #if R!=maxranks[0]:
-            #    equalize_ops += [cores[R].copycore_op(cores[maxranks[0]])]
-            q[R] = MPS(N, K, ranks, cores=cores[R])
-            elbof[R] = lambda sample: -(p.logp(sample, Xt) - q[R].contraction(sample))
-            softelbo[R] = 0.
-            for n in range(nsamples):
-                softelbo[R] += elbof[R](q[R].softsample())
-            softelbo[R] = softelbo[R]/nsamples
-            tf.summary.scalar('ELBO', -softelbo[R])
-            opt[R] = tf.train.AdamOptimizer()
-            step[R] = opt[R].minimize(softelbo[R])
+with tf.device('/device:GPU:0'):
+    with tf.name_scope("model"):
+        p = CollapsedStochasticBlock(N, K)
+        Xt = tf.constant(X)
+        print("building models...")
+        for R in tqdm.tqdm(maxranks):
+            with tf.name_scope("rank"+str(R)):
+                ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
+                cores[R] = Canonical(N, K, ranks)
+                #if R!=maxranks[0]:
+                #    equalize_ops += [cores[R].copycore_op(cores[maxranks[0]])]
+                q[R] = MPS(N, K, ranks, cores=cores[R])
+                elbof[R] = lambda sample: -(p.logp(sample, Xt) - q[R].contraction(sample))
+                softelbo[R] = 0.
+                for n in range(nsamples):
+                    softelbo[R] += elbof[R](q[R].softsample())
+                softelbo[R] = softelbo[R]/nsamples
+                tf.summary.scalar('ELBO', -softelbo[R])
+                opt[R] = tf.train.AdamOptimizer()
+                step[R] = opt[R].minimize(softelbo[R])
 
-    #equalize = tf.group(*equalize_ops)
-    train = tf.group(*step.values())
-    init = tf.global_variables_initializer()
-    summaries = tf.summary.merge_all()
-tf.get_default_graph().finalize()
-with tf.name_scope("optimization"):
-    sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
-    print("Starting optimization.")
-    for run in tqdm.tqdm(range(5), desc="Run", total=5):
-        writer = tf.summary.FileWriter('./train/' + folder + 'run' + str(run), sess.graph)
-        sess.run(init)
-        #sess.run(equalize)
-        for it in tqdm.tqdm(range(steps), desc='Optimization step', total=steps, leave=False):
-            _, it_summary = sess.run([train, summaries])
-            writer.add_summary(it_summary, it)
+        #equalize = tf.group(*equalize_ops)
+        train = tf.group(*step.values())
+        init = tf.global_variables_initializer()
+        summaries = tf.summary.merge_all()
+    tf.get_default_graph().finalize()
+    with tf.name_scope("optimization"):
+        sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
+        print("Starting optimization.")
+        for run in tqdm.tqdm(range(5), desc="Run", total=5):
+            writer = tf.summary.FileWriter('./train/' + folder + 'run' + str(run), sess.graph)
+            sess.run(init)
+            #sess.run(equalize)
+            for it in tqdm.tqdm(range(steps), desc='Optimization step', total=steps, leave=False):
+                _, it_summary = sess.run([train, summaries])
+                writer.add_summary(it_summary, it)
