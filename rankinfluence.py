@@ -11,19 +11,13 @@ from collapsedclustering import CollapsedStochasticBlock
 from tensornets import MPS, Canonical, symmetrynorm
 from edward.models import MultivariateNormalTriL, Dirichlet, WishartCholesky, ParamMixture
 
-N = 34
+N = 5
 K = 2
-maxranks = [1]#, 5, 10]
+maxranks = [1, 5]
 nsamples=5
 steps = 10000
 
-datademo = False
-timeit = False
-dotrain = True
-dynamic = True
-conditional = False
-grad_summaries= True
-folder = 'original'
+folder = 'testN34K2R5'
 #cap core rank at R
 
 np.random.seed(1)
@@ -92,7 +86,7 @@ with tf.name_scope("model"):
             for n in range(nsamples):
                 softelbo[R] += elbof[R](q[R].softsample())
             softelbo[R] = softelbo[R]/nsamples
-            tf.summary.scalar('ELBO', softelbo[R])
+            tf.summary.scalar('ELBO', -softelbo[R])
             opt[R] = tf.train.AdamOptimizer()
             step[R] = opt[R].minimize(softelbo[R])
 
@@ -100,12 +94,14 @@ with tf.name_scope("model"):
     train = tf.group(*step.values())
     init = tf.global_variables_initializer()
     summaries = tf.summary.merge_all()
+tf.get_default_graph().finalize()
 with tf.name_scope("optimization"):
-    sess = tf.Session()
-    writer = tf.summary.FileWriter('./train/' + folder, sess.graph)
-    sess.run(init)
-    #sess.run(equalize)
+    sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
     print("Starting optimization.")
-    for it in tqdm.tqdm(range(steps)):
-        _, it_summary = sess.run([train, summaries])
-        writer.add_summary(it_summary, it)
+    for run in tqdm.tqdm(range(5), desc="Run", total=5):
+        writer = tf.summary.FileWriter('./train/' + folder + 'run' + str(run), sess.graph)
+        sess.run(init)
+        #sess.run(equalize)
+        for it in tqdm.tqdm(range(steps), desc='Optimization step', total=steps, leave=False):
+            _, it_summary = sess.run([train, summaries])
+            writer.add_summary(it_summary, it)
