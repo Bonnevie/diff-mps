@@ -70,13 +70,13 @@ softelbo = {}
 opt = {}
 step = {}
 #equalize_ops = [tf.no_op()]
-with tf.device('/device:GPU:0'):
-    with tf.name_scope("model"):
-        p = CollapsedStochasticBlock(N, K)
-        Xt = tf.constant(X)
-        print("building models...")
-        for R in tqdm.tqdm(maxranks):
-            with tf.name_scope("rank"+str(R)):
+with tf.name_scope("model"):
+    p = CollapsedStochasticBlock(N, K)
+    Xt = tf.constant(X)
+    print("building models...")
+    for R in tqdm.tqdm(maxranks):
+        with tf.name_scope("rank"+str(R)):
+            with tf.device('/device:GPU:0'):
                 ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
                 cores[R] = Canonical(N, K, ranks)
                 #if R!=maxranks[0]:
@@ -87,14 +87,15 @@ with tf.device('/device:GPU:0'):
                 for n in range(nsamples):
                     softelbo[R] += elbof[R](q[R].softsample())
                 softelbo[R] = softelbo[R]/nsamples
-                tf.summary.scalar('ELBO', -softelbo[R])
                 opt[R] = tf.train.AdamOptimizer()
                 step[R] = opt[R].minimize(softelbo[R])
+            tf.summary.scalar('ELBO', -softelbo[R])
 
-        #equalize = tf.group(*equalize_ops)
+    #equalize = tf.group(*equalize_ops)
+    with tf.device('/device:GPU:0'):
         train = tf.group(*step.values())
         init = tf.global_variables_initializer()
-        summaries = tf.summary.merge_all()
+    summaries = tf.summary.merge_all()
     tf.get_default_graph().finalize()
     with tf.name_scope("optimization"):
         sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
