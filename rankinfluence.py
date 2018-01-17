@@ -13,12 +13,12 @@ from edward.models import MultivariateNormalTriL, Dirichlet, WishartCholesky, Pa
 
 N = 34
 K = 2
-maxranks = [1, 2, 3]
-nsamples=5
+maxranks = [1,2,3,5]
+nsamples=10
 steps = 20000
 runs = 3
 
-folder = 'testN34K2R123'
+folder = 'testN34K2R1235'
 #cap core rank at R
 
 np.random.seed(1)
@@ -66,45 +66,48 @@ tf.reset_default_graph()
 
 cores = {}
 q = {}
-elbof = {}
 softelbo = {}
 opt = {}
 step = {}
-#equalize_ops = [tf.no_op()]
+equalize_ops = []
+nancheck = False
 with tf.name_scope("model"):
     p = CollapsedStochasticBlock(N, K, alpha=100, a=10, b=10)
     Xt = tf.constant(X)
     print("building models...")
     for R in tqdm.tqdm(maxranks):
         with tf.name_scope("rank"+str(R)):
-            with tf.device('/device:GPU:0'):
-                ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
-                cores[R] = Canonical(N, K, ranks)
-                #if R!=maxranks[0]:
-                #    equalize_ops += [cores[R].copycore_op(cores[maxranks[0]])]
-                q[R] = MPS(N, K, ranks, cores=cores[R])
-                elbof[R] = lambda sample: -(p.logp(sample, Xt) - q[R].contraction(sample))
-                softelbo[R] = 0.
-                for n in range(nsamples):
-                    softelbo[R] += elbof[R](q[R].softsample())
-                softelbo[R] = softelbo[R]/nsamples
-                opt[R] = tf.train.AdamOptimizer()
-                step[R] = opt[R].minimize(softelbo[R])
+            ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
+            cores[R] = Canonical(N, K, ranks)
+            q[R] = MPS(N, K, ranks, cores=cores[R])
+            softelbo[R] = tf.reduce_mean(q[R].elbo(lambda sample: p.batch_logp(sample, Xt), nsamples=nsamples, fold=False))
+            opt[R] = tf.train.AdamOptimizer()
+            step[R] = opt[R].minimize(softelbo[R])
             tf.summary.scalar('ELBO', -softelbo[R])
 
-    #equalize = tf.group(*equalize_ops)
-    with tf.device('/device:GPU:0'):
-        train = tf.group(*step.values())
-        init = tf.global_variables_initializer()
+    train = tf.group(*step.values())
+    init = tf.global_variables_initializer()
     summaries = tf.summary.merge_all()
-    tf.get_default_graph().finalize()
+    #tf.get_default_graph().finalize()
     with tf.name_scope("optimization"):
-        sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
-        print("Starting optimization.")
-        for run in tqdm.tqdm(range(runs), desc="Run", total=5):
-            writer = tf.summary.FileWriter('./train/' + folder + 'run' + str(run), sess.graph)
+        sess = tf.Session()
+        if nancheck:
+            nonan = True
             sess.run(init)
-            #sess.run(equalize)
-            for it in tqdm.tqdm(range(steps), desc='Optimization step', total=steps, leave=False):
-                _, it_summary = sess.run([train, summaries])
-                writer.add_summary(it_summary, it)
+            g = opt[1].compute_gradients(softelbo[1], cores[1].params())
+            update = opt[1].apply_gradients(g)
+
+            nonan_op = tf.logical_not(tf.reduce_any([tf.is_nan(gi[0]) for gi in g if gi[0] is not None]))
+            nonan_op = tf.Print(nonan_op, [softelbo[1]])
+            nonan = True
+            while nonan:
+                sess.run(update)
+                nonan = sess.run(nonan_op)
+        else:
+            print("Starting optimization.")
+            for run in tqdm.tqdm(range(runs), desc="Run", total=5):
+                writer = tf.summary.FileWriter('./train/' + folder + 'run' + str(run), sess.graph)
+                sess.run(init)
+                for it in tqdm.tqdm(range(steps), desc='Optimization step', total=steps, leave=False):
+                    _, it_summary = sess.run([train, summaries])
+                    writer.add_summary(it_summary, it)

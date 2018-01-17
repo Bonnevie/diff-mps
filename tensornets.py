@@ -4,7 +4,7 @@ from relaxflow.reparam import CategoricalReparam, categorical_forward, categoric
 dtype = 'float64'
 
 import matplotlib.pyplot as plt
-from tfutils import tffunc, tfmethod
+from tfutils import tffunc, tfmethod, HouseholderChain
 select_max = lambda z, K: tf.one_hot(tf.argmax(z, axis=-1), K, dtype=dtype)
 bitify = lambda x: np.sum(K**np.arange(x.size)*x)
 
@@ -58,26 +58,37 @@ def multikron(A, B):
 class OrthogonalMatrix:
     '''Class constructs orthogonal matrix in Tensorflow as product of
     Householder reflections.'''
-    def __init__(self, N):
-        self._var = tf.Variable(np.random.randn(N, N).astype(dtype))
-        self.U = self._var/tf.sqrt(tf.reduce_sum(tf.square(self._var),
-                                                 axis=0, keep_dims=True))
-        self.T = tf.expand_dims(tf.eye(N, dtype=dtype), 0) -\
-                 2.*tf.einsum('ik,jk->kij', self.U, self.U)
-        self.matrix = self.T[0]
-        for t in tf.unstack(self.T[1:]):
-            self.matrix = tf.matmul(self.matrix, t)
-        # avoids While, equiv. to:
-        # self.matrix = tf.foldl(tf.matmul, self.T)
+    def __init__(self, N, eye=False):
+        self.N = N
+        if eye:
+            initial = np.eye(N, dtype=dtype)
+        else:
+            initial = np.random.randn(N, N).astype(dtype)
+        self._var = tf.Variable(initial)
+        self.V = self._var/tf.sqrt(tf.reduce_sum(tf.square(self._var),
+                                                 axis=1, keep_dims=True))
+        self.neg_matrix = HouseholderChain(self.V)
+
+    def dot(self, A):
+        return -self.neg_matrix.dot(A)
+
+    def dense(self):
+        return self.dot(tf.eye(self.N, dtype=dtype))
 
 @tffunc(1)
 def entropy(P):
-    return -tf.reduce_sum(P*tf.log(P))
+    return -tf.reduce_sum(P*tf.log(1e-16+P))
 
 @tffunc(2)
 def inner_broadcast(density, core):
     '''compute M_k=A_k^T*L*A_k'''
     return tf.einsum('krs,su,kut->krt', tf.transpose(core, [0,2,1]), density, core)
+
+@tffunc(2)
+def batch_inner_broadcast(density, core):
+    '''compute M_k=A_k^T*L*A_k'''
+    return tf.einsum('krs,bsu,kut->bkrt', tf.transpose(core, [0,2,1]), density, core)
+
 
 @tffunc(2)
 def inner_contraction(density, core, weights = None):
@@ -86,6 +97,14 @@ def inner_contraction(density, core, weights = None):
         return tf.reduce_sum(tf.reshape(weights, (-1, 1, 1)) * inner_broadcast(density, core), axis=0)
     else:
         return tf.einsum('krs,su,kut', tf.transpose(core, [0,2,1]), density, core)
+
+@tffunc(2)
+def batch_inner_contraction(density, core, weights = None):
+    '''compute Sum_k w_k*A_k^T*L*A_k'''
+    if weights is not None:
+        return tf.einsum('bkij,bk->bij', batch_inner_broadcast(density, core), weights)
+    else:
+        return tf.einsum('krs,bsu,kut', tf.transpose(core, [0,2,1]), density, core)
 
 
 class MPS:
@@ -118,11 +137,16 @@ class MPS:
             else:
                 self.raw = Core(N, K, ranks, cores)
 
-
-        self.cores = self.raw.scaledcores((1./tf.sqrt(self._scale()))
-                                              if normalized else tf.convert_to_tensor(1., dtype=dtype))
         self.right_canonical = self.raw.right_canonical
         self.left_canonical = self.raw.left_canonical
+
+
+        if self.right_canonical or self.left_canonical:
+            self.cores = self.raw.cores
+        else:
+            self.cores = self.raw.scaledcores((1./tf.sqrt(self._scale()))
+                                                if normalized else tf.convert_to_tensor(1., dtype=dtype))
+
 
         self._nuvar = tf.Variable(np.log(np.exp(1.)-1.), dtype=dtype)
         self.nu = tf.nn.softplus(self._nuvar)
@@ -168,6 +192,17 @@ class MPS:
             S = inner_contraction(S, core, z)
         return tf.reduce_sum(S)
 
+    def batch_contraction(self, Z, normalized=True):
+        if normalized:
+            cores = self.cores
+        else:
+            cores = self.raw.cores
+        batches = Z.shape[0]
+        S = tf.ones((batches, 1, 1), dtype=dtype)
+        for core, z in zip(cores, tf.unstack(Z, axis=1)):
+            S = batch_inner_contraction(S, core, z)
+        return tf.squeeze(tf.reduce_sum(S, axis=-1))
+
     @tfmethod(0)
     def buildcontrol(self, f, nsamples=1):
         '''Runs ancestral sampling routine on MPS and auxiliary shadow model
@@ -189,7 +224,7 @@ class MPS:
                 self.nu*conditional_control/nsamples, logp/nsamples)
 
     @tfmethod(0)
-    def softsample(self):
+    def softsample(self, nsamples=1):
         """Produce a single NxK sample from the shadow MPS, defined as the
         implicit generative model where sample 1 is drawn from the concrete
         relaxation of the marginal, and sample 2 (and so on) is drawn from
@@ -203,35 +238,36 @@ class MPS:
             Z: NxK tensor. A sample from the shadow MPS.
         """
 
-        shadowcondition = tf.ones((1, 1), dtype=dtype)
+        shadowcondition = tf.ones((nsamples, 1, 1), dtype=dtype)
         shadowsamples = []
         sequence = zip(self.cores, self.outer_marginal)
 
         for index, (core, marginal) in enumerate(sequence):
             if self.right_canonical:
                 shadowdistribution = tf.trace(
-                    inner_broadcast(shadowcondition, core))
+                    batch_inner_broadcast(shadowcondition, core))
             else:
                 shadowdistribution = tf.einsum(
-                    'kij,ji', inner_broadcast(shadowcondition, core),
+                    'bkij,ji', batch_inner_broadcast(shadowcondition, core),
                     marginal)
 
             shadowreparam = CategoricalReparam(
-                tf.expand_dims(tf.log(shadowdistribution), 0),
+                tf.log(1e-16+shadowdistribution),
                 temperature=self.temperatures[index])
 
             shadowsample = shadowreparam.gatedz
             shadowsamples += [shadowsample]
 
-            shadowupdate = tf.einsum('kij,k', core,
-                                     tf.squeeze(shadowsample))
-            shadowcondition = tf.einsum('ik,kl,lj',
-                                        tf.transpose(shadowupdate),
+            shadowupdate = tf.einsum('kij,bk', core,
+                                     shadowsample)
+            shadowcondition = tf.einsum('bik,bkl,blj->bij',
+                                        tf.transpose(shadowupdate, [0,2,1]),
                                         shadowcondition, shadowupdate)
 
-        shadowb = tf.concat(shadowsamples, axis=0)
+        shadowb = tf.transpose(tf.stack(shadowsamples), [1,0,2])
+        return tf.squeeze(shadowb)
 
-        return shadowb
+
 
     @tfmethod(0)
     def sample(self, doshadowsample=False, coupled=False):
@@ -372,19 +408,51 @@ class MPS:
 
     @tfmethod(0)
     def marginals(self):
-        return tf.stack([tf.einsum('kiu,ur,krs,si->k',
-                                   tf.transpose(core,[0, 2, 1]),
-                                   inner_marg, core, outer_marg)
-                         for core, inner_marg, outer_marg in
-                         zip(self.cores,
-                             self.inner_marginal,
-                             self.outer_marginal)])
+        if self.left_canonical:
+            return tf.stack([tf.einsum('kir,krs,si->k',
+                                       tf.transpose(core,[0, 2, 1]),
+                                       core, outer_marg)
+                             for core, outer_marg in
+                             zip(self.cores,
+                                 self.outer_marginal)])
+        elif self.right_canonical:
+            return tf.stack([tf.einsum('kiu,ur,kri->k',
+                                       tf.transpose(core,[0, 2, 1]),
+                                       inner_marg, core)
+                             for core, inner_marg in
+                             zip(self.cores,
+                                 self.inner_marginal)])
+        else:
+            return tf.stack([tf.einsum('kiu,ur,krs,si->k',
+                                       tf.transpose(core,[0, 2, 1]),
+                                       inner_marg, core, outer_marg)
+                             for core, inner_marg, outer_marg in
+                             zip(self.cores,
+                                 self.inner_marginal,
+                                 self.outer_marginal)])
 
     @tfmethod(0)
     def marginalentropy(self):
         '''calculate entropy of marginals'''
         marginals = self.marginals()
         return entropy(marginals)
+
+    def elbo(self, f, nsamples=1, fold=False, marginal=True):
+        samples = self.softsample(nsamples)
+        if fold:
+            loss = tf.map_fn(f, samples)
+        else:
+            loss = f(samples)
+        if marginal:
+            marginalcv = self.marginalentropy() + \
+                        tf.reduce_sum(samples*tf.log(1e-16+self.marginals())[None, :, :], axis=[1,2])
+        else:
+            marginalcv = 0.
+        return loss - tf.log(1e-16+self.batch_contraction(samples)) + marginalcv
+
+    #def totalcorrelation(self, nsamples=5):
+    #    sample =
+    #    return tf.log(self.contraction())
 
     @tfmethod(0)
     def populatetensor(self):
@@ -497,7 +565,7 @@ class Canonical(Core):
     If used in an MPS, this means that either the inner_marginal or outer_marginal
     matrices will be trivially equal to the identity,
     '''
-    def __init__(self, N, K, ranks, left=False):
+    def __init__(self, N, K, ranks, left=False, initials=None):
         '''
             Constructs canonical core set.
 
@@ -514,8 +582,11 @@ class Canonical(Core):
         self.N  = N
         self.K = K
         self.ranks = ranks
-        self.right_canonical = ~left
+        self.right_canonical = not left
         self.left_canonical = left
+
+
+
 
         assert(len(ranks) == N+1)
         assert(ranks[0] == 1 & ranks[-1] == 1)
@@ -530,23 +601,46 @@ class Canonical(Core):
             orthogonal_rank = 1
             shape_factor = (1, self.K)
 
+        if initials is None:
+            self.initials = []
+            for ranks in zip(self.ranks[:-1], self.ranks[1:]):
+                I = np.eye(self.K*ranks[orthogonal_rank])
+                self.initials.append(I[:shape_factor[0]*ranks[0],
+                                       :shape_factor[1]*ranks[1]])
+        else:
+            for initial, rank0, rank1 in zip(self.initials, self.ranks[:-1],
+                                            self.ranks[1:]):
+                assert(initial.shape == (shape_factor[0]*rank0,
+                                         shape_factor[1]*rank1))
+            self.initials = initials
+
         with tf.name_scope("orthogonal"):
             #orthogonal matrices
-            self._U = [OrthogonalMatrix(self.K*ranks[orthogonal_rank]) for ranks
+            self.U = [OrthogonalMatrix(self.K*ranks[orthogonal_rank]) for ranks
                       in zip(self.ranks[:-1], self.ranks[1:])]
-            self.U = self._U
         with tf.name_scope("cores"):
             #set of canonical cores
-            self.cores = [restack(u.matrix[0:shape_factor[0]*rank0,
-                                           0:shape_factor[1]*rank1], rank0, rank1)
-                          for u, rank0, rank1 in zip(self.U, self.ranks[:-1],
-                                                     self.ranks[1:])]
+            self.cores = []
+            for initial, u, rank0, rank1 in zip(self.initials, self.U,
+                                                self.ranks[:-1],
+                                                self.ranks[1:]):
+                try:
+                    C = u.dot(initial)
+                except ValueError:
+                    C = tf.transpose(u.dot(tf.transpose(initial)))
+                self.cores.append(restack(C, rank0, rank1))
+
+    @staticmethod
+    def restack(A, rank0, rank1):
+        '''transforms orthogonal matrix of shape K*r0 x r1 into stack of shape r0 x K x r1.'''
+        return tf.transpose(tf.reshape(A, (rank0, self.K, rank1)),
+                            [1,0,2])
 
     def params(self):
-        return [u._var for u in self._U]
+        return [u._var for u in self.U]
 
     def copycore_op(self, core):
-        ops = [u1._var.assign(u2._var) for u1, u2 in zip(self._U, core._U)]
+        ops = [u1._var.assign(u2._var) for u1, u2 in zip(self.U, core.U)]
         return tf.group(*ops)
 
 def rootofunity(K):
@@ -616,6 +710,8 @@ if __name__ is "__main__":
     orth=Canonical(N, K, ranks)
     orth_model = MPS(N, K, ranks, cores=orth)
 
+    loss = orth_model.elbo(lambda x: 1., nsamples=10)
+if False:
     #optimization routine for marginal entropy
     opt = tf.contrib.opt.ScipyOptimizerInterface(-orth_model.marginalentropy(), orth.params(), tol=1e-10,method='CG')
 

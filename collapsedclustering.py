@@ -135,14 +135,17 @@ class CollapsedStochasticBlock(CollapsedMixture):
         self.b = tf.convert_to_tensor(b, dtype=dtype)
 
     @tfmethod(2)
-    def logp(self, Z, X):
+    def logp(self, Z, X, observed=None):
         #unpack from singleton list
         if len(Z.shape)>2:
             Z = Z[0]
 
+        if observed is None:
+            observed = tf.ones((self.N, self.N), dtype=dtype)
+
         membership = tf.reduce_sum(Z, axis=0, keep_dims=True)
-        edgecounts = tf.matmul(tf.matmul(Z, X, transpose_a=True), Z)
-        notedgecounts = tf.matmul(membership, membership, transpose_b=True) - edgecounts
+        edgecounts = tf.einsum('mk,mn,nl', Z, observed*X, Z) #Z^T*X*Z
+        notedgecounts = tf.einsum('mk,mn,nl', Z, observed, Z) - edgecounts
 
         lnprior = tf.reduce_sum(tf.lbeta(tf.transpose(self.alpha +
                                                       membership)) -
@@ -156,6 +159,25 @@ class CollapsedStochasticBlock(CollapsedMixture):
                                                   axis=2)))
         return lnprior + lnlink
 
+    @tfmethod(2)
+    def batch_logp(self, Z, X, observed=None):
+        if observed is None:
+            observed = tf.ones((self.N, self.N), dtype=dtype)
+
+        membership = tf.reduce_sum(Z, axis=1, keep_dims=True)
+        edgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed*X, Z) #Z^T*X*Z
+        notedgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed, Z) - edgecounts
+
+
+        lnprior = tf.squeeze(tf.lbeta(self.alpha + membership) -
+                             tf.lbeta(self.alpha + tf.zeros_like(membership)))
+        lnlink = tf.reduce_sum(tf.lbeta(tf.stack([self.a + edgecounts,
+                                                  self.b + notedgecounts],
+                                                  axis=2)) -
+                               tf.lbeta(tf.stack([self.a + tf.zeros_like(edgecounts),
+                                                  self.b + tf.zeros_like(notedgecounts)],
+                                                  axis=2)), axis=[1,2])
+        return lnprior + lnlink
 
 class CollapsedBipartiteStochasticBlock(CollapsedMultipartite):
     def __init__(self, Ns, Ks, alpha0=1., a=1., b=1.):
