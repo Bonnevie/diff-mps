@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
-from relaxflow.relax import RELAX, CategoricalReparam#, categorical_forward, categorical_backward
+from relaxflow.reparam import CategoricalReparam
+#from relaxflow.relax import RELAX, CategoricalReparam#, categorical_forward, categorical_backward
 import time
 dtype = 'float64'
 
