@@ -5,7 +5,6 @@ import time
 dtype = 'float64'
 
 import tqdm
-import matplotlib.pyplot as plt
 
 from collapsedclustering import CollapsedStochasticBlock
 from tensornets import MPS, Canonical, symmetrynorm

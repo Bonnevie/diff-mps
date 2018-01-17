@@ -3,7 +3,6 @@ import tensorflow as tf
 from relaxflow.reparam import CategoricalReparam, categorical_forward, categorical_backward
 dtype = 'float64'
 
-import matplotlib.pyplot as plt
 from tfutils import tffunc, tfmethod, HouseholderChain
 select_max = lambda z, K: tf.one_hot(tf.argmax(z, axis=-1), K, dtype=dtype)
 bitify = lambda x: np.sum(K**np.arange(x.size)*x)
