@@ -8,18 +8,20 @@ dtype = 'float64'
 import tqdm
 
 from collapsedclustering import CollapsedStochasticBlock
-from tensornets import MPS, Canonical, symmetrynorm
+from tensornets import MPS, Canonical, symmetrynorm, CayleyOrthogonal
 from edward.models import MultivariateNormalTriL, Dirichlet, WishartCholesky, ParamMixture
 
-N = 34
-K = 2
-maxranks = [1,2,3,5]
-nsamples=10
+N = 10
+K = 3
+maxranks = [1,20]
+nsamples=1000
 steps = 20000
 runs = 3
 
-folder = 'testN34K2R1235'
+folder = 'testN{}K{}R{}'.format(N, K, '-'.join(str(rank) for rank in maxranks))
 #cap core rank at R
+
+timeit = False
 
 np.random.seed(1)
 
@@ -78,9 +80,10 @@ with tf.name_scope("model"):
     for R in tqdm.tqdm(maxranks):
         with tf.name_scope("rank"+str(R)):
             ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
-            cores[R] = Canonical(N, K, ranks)
+            cores[R] = Canonical(N, K, ranks, orthogonalstyle=CayleyOrthogonal)
             q[R] = MPS(N, K, ranks, cores=cores[R])
             softelbo[R] = tf.reduce_mean(q[R].elbo(lambda sample: p.batch_logp(sample, Xt), nsamples=nsamples, fold=False))
+
             opt[R] = tf.train.AdamOptimizer()
             step[R] = opt[R].minimize(softelbo[R])
             tf.summary.scalar('ELBO', -softelbo[R])
@@ -88,6 +91,10 @@ with tf.name_scope("model"):
     train = tf.group(*step.values())
     init = tf.global_variables_initializer()
     summaries = tf.summary.merge_all()
+    if timeit:
+        run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        run_metadata = tf.RunMetadata()
+
     #tf.get_default_graph().finalize()
     with tf.name_scope("optimization"):
         sess = tf.Session()
@@ -109,5 +116,12 @@ with tf.name_scope("model"):
                 writer = tf.summary.FileWriter('./train/' + folder + 'run' + str(run), sess.graph)
                 sess.run(init)
                 for it in tqdm.tqdm(range(steps), desc='Optimization step', total=steps, leave=False):
-                    _, it_summary = sess.run([train, summaries])
+                    if timeit:
+                        _, it_summary = sess.run([train, summaries],
+                                                 options=run_options,
+                                                 run_metadata=run_metadata)
+                    else:
+                        _, it_summary = sess.run([train, summaries])
                     writer.add_summary(it_summary, it)
+                    if timeit:
+                        writer.add_run_metadata(run_metadata, "trace{}".format(it))

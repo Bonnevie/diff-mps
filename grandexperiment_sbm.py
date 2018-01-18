@@ -205,7 +205,6 @@ with tf.name_scope("opt_step"):
     all_step = tf.group(soft_step, relax_step, var_step, cond_step, cond_var_step)
 run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
 config = tf.ConfigProto()
-
 config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
 
 sess = tf.Session(config=config)

@@ -74,6 +74,22 @@ class OrthogonalMatrix:
     def dense(self):
         return self.dot(tf.eye(self.N, dtype=dtype))
 
+class CayleyOrthogonal:
+    def __init__(self, N):
+        self.N = N
+        self._var = tf.Variable(np.random.randn(N, N).astype(dtype))
+        self.triu = tf.matrix_band_part(self._var, 0, -1)
+        self.skew = self.triu-tf.transpose(self.triu)
+        I = tf.eye(N, dtype=dtype)
+        self.matrix = tf.matrix_solve(I + self.skew,
+                                      I - self.skew)
+
+    def dot(self, A):
+        return tf.matmul(self.matrix, A)
+
+    def dense(self):
+        return self.matrix
+
 @tffunc(1)
 def entropy(P):
     return -tf.reduce_sum(P*tf.log(1e-16+P))
@@ -126,7 +142,7 @@ class MPS:
             .cores[i] should have shape K x ranks[i] x ranks[i+1].
         normalized (True) - Boolean. If true, the tensor is normalized to 1.
     """
-    def __init__(self, N, K, ranks, cores=None, normalized=True, multi_temp=False):
+    def __init__(self, N, K, ranks, cores=None, normalized=True, multi_temp=False, scan=True):
         self.N  = N
         self.K = K
         self.ranks = ranks
@@ -144,16 +160,17 @@ class MPS:
             self.cores = self.raw.cores
         else:
             self.cores = self.raw.scaledcores((1./tf.sqrt(self._scale()))
-                                                if normalized else tf.convert_to_tensor(1., dtype=dtype))
+                                                if normalized else
+                                                tf.convert_to_tensor(1., dtype=dtype))
 
 
         self._nuvar = tf.Variable(np.log(np.exp(1.)-1.), dtype=dtype)
         self.nu = tf.nn.softplus(self._nuvar)
         if multi_temp:
-            self._tempvar = tf.Variable(np.log(np.exp(0.1)-1.)*np.ones(N), dtype=dtype)
+            self._tempvar = tf.Variable(np.log(np.exp(0.5)-1.)*np.ones(N), dtype=dtype)
             self.temperatures = tf.nn.softplus(self._tempvar)
         else:
-            self._tempvar = tf.Variable(np.log(np.exp(0.1)-1.), dtype=dtype)
+            self._tempvar = tf.Variable(np.log(np.exp(0.5)-1.), dtype=dtype)
             self.temperatures = tf.nn.softplus(self._tempvar)*tf.ones(N, dtype=dtype)
         self.softgate = lambda z: tf.nn.softmax(z/self.temperature, dim=-1) #scaled softmax
 
@@ -189,8 +206,9 @@ class MPS:
         S = tf.ones((1, 1), dtype=dtype)
         for core, z in zip(cores, tf.unstack(Z)):
             S = inner_contraction(S, core, z)
-        return tf.reduce_sum(S)
+        return tf.squeeze(S)
 
+    @tfmethod(1)
     def batch_contraction(self, Z, normalized=True):
         if normalized:
             cores = self.cores
@@ -198,9 +216,10 @@ class MPS:
             cores = self.raw.cores
         batches = Z.shape[0]
         S = tf.ones((batches, 1, 1), dtype=dtype)
+
         for core, z in zip(cores, tf.unstack(Z, axis=1)):
             S = batch_inner_contraction(S, core, z)
-        return tf.squeeze(tf.reduce_sum(S, axis=-1))
+        return tf.squeeze(S)
 
     @tfmethod(0)
     def buildcontrol(self, f, nsamples=1):
@@ -265,8 +284,6 @@ class MPS:
 
         shadowb = tf.transpose(tf.stack(shadowsamples), [1,0,2])
         return tf.squeeze(shadowb)
-
-
 
     @tfmethod(0)
     def sample(self, doshadowsample=False, coupled=False):
@@ -436,18 +453,23 @@ class MPS:
         marginals = self.marginals()
         return entropy(marginals)
 
-    def elbo(self, f, nsamples=1, fold=False, marginal=True):
+    def elbo(self, f, nsamples=1, fold=False, marginal=True, invtemp=1.):
         samples = self.softsample(nsamples)
         if fold:
             loss = tf.map_fn(f, samples)
         else:
             loss = f(samples)
         if marginal:
-            marginalcv = self.marginalentropy() + \
-                        tf.reduce_sum(samples*tf.log(1e-16+self.marginals())[None, :, :], axis=[1,2])
+            marginals = self.marginals()
+            marginalcv = (-tf.reduce_sum(marginals *
+                                         tf.log(1e-16+marginals)) +
+                          tf.reduce_sum(samples *
+                                        tf.log(1e-16+marginals)[None, :, :],
+                                        axis=[1, 2]))
         else:
             marginalcv = 0.
-        return loss - tf.log(1e-16+self.batch_contraction(samples)) + marginalcv
+        return loss - invtemp*(tf.log(1e-16+self.batch_contraction(samples)) +
+                       marginalcv)
 
     #def totalcorrelation(self, nsamples=5):
     #    sample =
@@ -481,6 +503,20 @@ class MPS:
 
     def var_params(self):
         return [self._tempvar, self._nuvar]
+
+def norm_rank1(mps, rank1):
+    cores = mps.cores
+    transfer = [multikron(core, core) for core in cores]
+    N  = rank1.shape[0]
+
+    normr1 = tf.einsum('kni,lni->', rank1, rank1)
+    innerproducts = mps.batch_contraction(rank1)
+
+    normmps = tf.ones((1,1), dtype=dtype)
+    for core in zip(transfer):
+        normmps = inner_contraction(normmps, core)
+
+    return normmps + normr1/N**2. - 2.*innerproducts/N
 
 def symmetrynorm(cores):
     '''
@@ -564,7 +600,7 @@ class Canonical(Core):
     If used in an MPS, this means that either the inner_marginal or outer_marginal
     matrices will be trivially equal to the identity,
     '''
-    def __init__(self, N, K, ranks, left=False, initials=None):
+    def __init__(self, N, K, ranks, left=False, initials=None, orthogonalstyle=OrthogonalMatrix):
         '''
             Constructs canonical core set.
 
@@ -615,7 +651,7 @@ class Canonical(Core):
 
         with tf.name_scope("orthogonal"):
             #orthogonal matrices
-            self.U = [OrthogonalMatrix(self.K*ranks[orthogonal_rank]) for ranks
+            self.U = [orthogonalstyle(self.K*ranks[orthogonal_rank]) for ranks
                       in zip(self.ranks[:-1], self.ranks[1:])]
         with tf.name_scope("cores"):
             #set of canonical cores
