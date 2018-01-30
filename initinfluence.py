@@ -16,7 +16,7 @@ coretype = 'Tcanon' #'Tperm', 'Tcanon', ''
 N = 10
 K = 3
 maxranks = [1, 3, 9, 27]#[1,6,9,12,15,18,21,24]
-nsamples=500
+nsamples=100
 steps = 1000
 nmodes = 10
 runs = 10
@@ -36,7 +36,7 @@ X = np.random.randn(*(N, N))
 X =(1.-np.eye(N))*(np.tril(X) + np.tril(X).T)
 tf.reset_default_graph()
 
-init_types = ['random', 'entropy', 'expectation'] #rank1
+init_types = ['random', 'entropy'] #rank1
 cores = {t: {} for t in init_types}
 q = {t: {} for t in init_types}
 softelbo = {t: {} for t in init_types}
@@ -107,8 +107,8 @@ with tf.name_scope("model"):
                 pcore, pmps = tn.full2TT(np.sqrt(ptensor))
                 true_loss_op = tf.reduce_mean(pmps.elbo(lambda sample: p.batch_logp(sample, Xt), nsamples=nsamples, fold=False))
 
-    init = tf.global_variables_initializer()
-    sess.run(init)
+    initialize = tf.global_variables_initializer()
+    sess.run(initialize)
 
     if calculate_true:
         true_loss = sess.run(true_loss_op)
@@ -117,7 +117,7 @@ with tf.name_scope("model"):
         print("Starting optimization.")
         for run in tqdm.tqdm(range(runs), desc="Run", total=runs):
             writer = tf.summary.FileWriter('./train/' + folder + 'run' + str(run), sess.graph)
-            sess.run(init)
+            sess.run(initialize)
             mode_opt.minimize(sess)
             print('Initializing...')
             for init in init_types:
