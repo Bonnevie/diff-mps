@@ -70,7 +70,7 @@ class CollapsedMixture:
         return tf.map_fn(lambda x: tf.map_fn(logpx, x, dtype=dtype), Zi, dtype=dtype) #<--
 
     @tfmethod(1)
-    def populatetensor(self, X):
+    def populatetensor(self, X, sess=None):
         sess = tf.get_default_session()
         shape = self.N*(self.K,)
         size = self.K**self.N
@@ -106,7 +106,7 @@ class CollapsedMultipartite(CollapsedMixture):
         return logp_cond
 
     @tfmethod(1)
-    def populatetensor(self, X):
+    def populatetensor(self, X, normalize=True):
         sess = tf.get_default_session()
         shapes = [N*(K, ) for N, K in zip(self.Ns, self.Ks)]
         shape = tuple(chain(*shapes))
@@ -123,8 +123,10 @@ class CollapsedMultipartite(CollapsedMixture):
             """Compute softmax values for each sets of scores in x."""
             e_x = np.exp(x - np.max(x))
             return e_x / e_x.sum()
-        return np.reshape(softmax(Zstar_vec), shape)
-
+        if normalize:
+            return np.reshape(softmax(Zstar_vec), shape)
+        else:
+            return np.reshape(Zstar_vec, shape)
 
 class CollapsedStochasticBlock(CollapsedMixture):
     def __init__(self, N, K, alpha=1., a=1., b=1.):
