@@ -11,14 +11,14 @@ from collapsedclustering import CollapsedStochasticBlock, KLcorrectedBound
 import tensornets as tn
 from edward.models import MultivariateNormalTriL, Dirichlet, WishartCholesky, ParamMixture
 
-name = 'initinfluence'
+name = 'speedtest'
 coretype = 'Tcanon' #'Tperm', 'Tcanon', ''
 N = 10
 K = 3
 maxranks = [1, 3, 9, 27]#[1,6,9,12,15,18,21,24]
 nsamples=100
-steps = 1000
-nmodes = 10
+steps = 5000
+nmodes = 0
 runs = 10
 version = 1
 rate = 0.001
@@ -50,10 +50,11 @@ with tf.name_scope("model"):
     p = CollapsedStochasticBlock(N, K, alpha=100, a=10, b=10)
     Z = tf.Variable(tf.random_normal((len(maxranks),nmodes, N, K), dtype=dtype))
 
-    bounds = -tf.reduce_mean([KLcorrectedBound(p, X, [z]).bound 
-                              for zstack in tf.unstack(Z, axis=0) for z in tf.unstack(zstack, axis=0)])
-    mode_opt = tf.contrib.opt.ScipyOptimizerInterface(bounds, var_list=[Z])
-    
+    if nmodes>0:
+        bounds = -tf.reduce_mean([KLcorrectedBound(p, X, [z]).bound 
+                                for zstack in tf.unstack(Z, axis=0) for z in tf.unstack(zstack, axis=0)])
+        mode_opt = tf.contrib.opt.ScipyOptimizerInterface(bounds, var_list=[Z])
+        
     Xt = tf.constant(X)
     print("building models...")
     for init in tqdm.tqdm(init_types, desc='init', total=len(init_types)):
@@ -98,8 +99,11 @@ with tf.name_scope("model"):
 
     train = tf.group(*step_list)
     summaries = tf.summary.merge_all()
+    
+    config = tf.ConfigProto()
+    config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
+    sess = tf.Session(config=config)
 
-    sess = tf.Session()
     with tf.name_scope("truemodel"):
         if calculate_true:
             with sess.as_default():
@@ -118,7 +122,8 @@ with tf.name_scope("model"):
         for run in tqdm.tqdm(range(runs), desc="Run", total=runs):
             writer = tf.summary.FileWriter('./train/' + folder + 'run' + str(run), sess.graph)
             sess.run(initialize)
-            mode_opt.minimize(sess)
+            if nmodes>0:
+                mode_opt.minimize(sess)
             print('Initializing...')
             for init in init_types:
                 for R in tqdm.tqdm(maxranks):
