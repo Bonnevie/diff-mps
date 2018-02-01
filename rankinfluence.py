@@ -11,12 +11,12 @@ from collapsedclustering import CollapsedStochasticBlock, KLcorrectedBound
 import tensornets as tn
 from edward.models import MultivariateNormalTriL, Dirichlet, WishartCholesky, ParamMixture
 
-name = 'rankinfluence'
+name = 'report'
 datatype = 'karate'
 coretype = 'Tcanon' #'Tperm', 'Tcanon', ''
 N = 34
 K = 3
-maxranks = [1, 9, 27, 81]#[1,6,9,12,15,18,21,24]
+maxranks = [1, 9, 27]#[1,6,9,12,15,18,21,24]
 nsamples=100
 steps = 10000
 runs = 10
@@ -104,16 +104,16 @@ with tf.name_scope("model"):
                 ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
                 cores[R] = tn.Core(N, K, ranks)
             q[R] = tn.MPS(N, K, ranks, cores=cores[R])
-            softelbo[R] = tf.reduce_mean(q[R].elbo(lambda sample: p.batch_logp(sample, Xt), nsamples=nsamples, fold=False))
-            #softelbo[R] = tf.reduce_mean(q[R].elbo(lambda sample: 0., nsamples=nsamples, fold=False))
-            #mode_loss = -(q[R].marginalentropy())
-            #mode_loss = tf.convert_to_tensor(np.array(0.).astype('float64'))
-            #mode_loss = tf.reduce_sum(tn.norm_rank1(q[R], tf.nn.softmax(Z))) 
-            #init_opt[R] = tf.contrib.opt.ScipyOptimizerInterface(mode_loss)
-            #init_opt[R] = tf.contrib.opt.ScipyOptimizerInterface()
+            elbo, loss, entropy, marginalentropy, marginalcv = (q[R].elbo(lambda sample: p.batch_logp(sample, Xt), nsamples=nsamples, fold=False, report=True))
+            softelbo[R] = tf.reduce_mean(elbo)
+            #softelbo[R] = tf.reduce_mean(q[R].elbo(lambda sample: p.batch_logp(sample, Xt), nsamples=nsamples, fold=False))
             opt[R] = tf.train.AdamOptimizer(learning_rate=rate)
             step[R] = opt[R].minimize(-softelbo[R], var_list=cores[R].params())
-            tf.summary.scalar('ELBO', softelbo[R])
+            tf.summary.histogram('ELBO', elbo)
+            tf.summary.histogram('logp', loss)
+            tf.summary.histogram('entropy', entropy)
+            tf.summary.histogram('marginalentropy', marginalentropy)
+            tf.summary.histogram('cv', marginalcv)
 
 
 
@@ -163,17 +163,3 @@ with tf.name_scope("model"):
                 if timeit:
                     writer.add_run_metadata(run_metadata, "trace{}".format(it))
             Q[run] = q
-
-if False:
-    if nancheck:
-        nonan = True
-        sess.run(init)
-        g = opt[1].compute_gradients(softelbo[1], cores[1].params())
-        update = opt[1].apply_gradients(g)
-
-        nonan_op = tf.logical_not(tf.reduce_any([tf.is_nan(gi[0]) for gi in g if gi[0] is not None]))
-        nonan_op = tf.Print(nonan_op, [softelbo[1]])
-        nonan = True
-        while nonan:
-            sess.run(update)
-            nonan = sess.run(nonan_op)

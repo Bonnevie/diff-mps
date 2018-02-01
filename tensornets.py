@@ -573,24 +573,27 @@ class MPS:
         marginals = self.marginals()
         return entropy(marginals)
 
-    def elbo(self, f, nsamples=1, fold=False, marginal=True, invtemp=1.):
+    def elbo(self, f, nsamples=1, fold=False, marginal=True, invtemp=1., report=False):
         samples = self.softsample(nsamples)
         if fold:
-            loss = tf.map_fn(f, samples)
+            llk = tf.map_fn(f, samples)
         else:
-            loss = f(samples)
+            llk = f(samples)
         if marginal:
             marginals = self.marginals()
-            marginalcv = (-tf.reduce_sum(marginals *
-                                         tf.log(1e-16+marginals)) +
+            marginalentropy = -tf.reduce_sum(marginals * tf.log(1e-16+marginals))
+            marginalcv = (marginalentropy +
                           tf.reduce_sum(samples *
                                         tf.log(1e-16+marginals)[None, :, :],
                                         axis=[1, 2]))
         else:
             marginalcv = 0.
-        return loss - invtemp*(tf.log(1e-16+self.batch_contraction(samples)) +
-                       marginalcv)
-
+        entropy = -tf.log(1e-16+self.batch_contraction(samples))
+        elbo = llk + invtemp*(entropy + marginalcv)
+        if report:
+            return (elbo, llk, entropy, marginalentropy, marginalcv)
+        else:
+            return elbo
     #def totalcorrelation(self, nsamples=5):
     #    sample =
     #    return tf.log(self.contraction())
