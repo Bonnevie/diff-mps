@@ -230,7 +230,6 @@ def unpackmps(metadata):
         sess = tf.get_default_session()
     sess.run(mass_assign)
     return (mps, cores, mass_assign, metadata)
->>>>>>> Stashed changes
 
 class MPS:
     """
@@ -466,7 +465,6 @@ class MPS:
                 shadowsample = shadowreparam.gatedz
                 shadowsamples += [shadowsample]
 
-                #CHANGE: CRITICAL MODIFICATION
                 zb = reparam.zb
                 sb = zb + shadowreparam.param - reparam.param
                 conditionalshadowsample = shadowreparam.softgate(
@@ -574,7 +572,9 @@ class MPS:
         marginals = self.marginals()
         return entropy(marginals)
 
-    def elbo(self, f, nsamples=1, fold=False, marginal=True, invtemp=1., report=False):
+    @tfmethod(0)
+    def elbo(self, f, nsamples=1, fold=False, marginal=True, invtemp=1., cvweight=1., report=False):
+        '''calculate ELBO or another entropy-weighted expectation using nsamples MC samples'''
         samples = self.softsample(nsamples)
         if fold:
             llk = tf.map_fn(f, samples)
@@ -590,14 +590,25 @@ class MPS:
         else:
             marginalcv = 0.
         entropy = -tf.log(1e-16+self.batch_contraction(samples))
-        elbo = llk + invtemp*(entropy + marginalcv)
+        elbo = llk + entropy + cvweight*marginalcv
+        objective = llk + invtemp*(entropy + cvweight*marginalcv)
         if report:
-            return (elbo, llk, entropy, marginalentropy, marginalcv)
+            return (objective, elbo, llk, entropy, marginalentropy, marginalcv)
         else:
             return elbo
     #def totalcorrelation(self, nsamples=5):
     #    sample =
     #    return tf.log(self.contraction())
+
+    @tfmethod(0)
+    def pred(self, f, nsamples=1, fold=False):
+        '''calculate expectation of function f over nsamples samples from model'''
+        samples = self.softsample(nsamples)
+        if fold:
+            llk = tf.map_fn(f, samples)
+        else:
+            llk = f(samples)
+        return llk
 
     @tfmethod(0)
     def populatetensor(self):

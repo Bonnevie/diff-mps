@@ -162,7 +162,7 @@ with tf.name_scope("model"):
                     anneal_invtemp = 1.
                 q[configc] = tn.MPS(N, K, ranks, cores=cores[configc])
                 cvweight = 1.
-                objective, elbo, loss, entropy, marginalentropy, marginalcv = (q[configc].elbo(lambda sample: p.batch_logp(sample, Xt, observed=mask), nsamples=nsamples, fold=False, report=True, cvweight=cvweight.alpha(), invtemp=anneal_invtemp))
+                objective, elbo, loss, entropy, marginalentropy, marginalcv = (q[configc].elbo(lambda sample: p.batch_logp(sample, Xt, observed=mask), nsamples=nsamples, fold=False, report=True, cvweight=cvweight, invtemp=anneal_invtemp))
                 pred = q[configc].pred(lambda sample: p.batch_logp(sample, Xt, observed=~mask), nsamples=nsamples, fold=False)
                 softpred[configc] = tf.reduce_mean(pred)
                 softelbo[configc] = tf.reduce_mean(elbo)
