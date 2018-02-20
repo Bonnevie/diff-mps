@@ -11,32 +11,74 @@ from collapsedclustering import CollapsedStochasticBlock, KLcorrectedBound
 import tensornets as tn
 from edward.models import MultivariateNormalTriL, Dirichlet, WishartCholesky, ParamMixture
 
-name = 'speedtest'
-coretype = 'Tcanon' #'Tperm', 'Tcanon', ''
+name = 'sym'
+datatype = 'karate'
+coretype = 'Tperm' #'Tperm', 'Tcanon', ''
 N = 10
 K = 3
-maxranks = [1, 3, 9, 27]#[1,6,9,12,15,18,21,24]
+maxranks = [3, 9, 27]#[1,6,9,12,15,18,21,24]
 nsamples=100
 steps = 5000
+copies = 5
 nmodes = 0
 runs = 10
-version = 1
+version = 2
 rate = 0.001
 
-folder = name + '{}V{}N{}K{}S{}R{}'.format(coretype,version, N, K, nsamples, '-'.join(str(rank) for rank in maxranks))
+folder = name + '{}D{}V{}N{}K{}S{}R{}'.format(coretype,datatype,version, N, K, nsamples, '-'.join(str(rank) for rank in maxranks))
 #cap core rank at R
 
 timeit = False
-calculate_true = True
+calculate_true = False
 
 np.random.seed(1)
 
 #5-22
-X = np.random.randn(*(N, N))
-X =(1.-np.eye(N))*(np.tril(X) + np.tril(X).T)
-tf.reset_default_graph()
+if datatype is 'random':
+    np.random.seed(1)
 
-init_types = ['random', 'entropy'] #rank1
+    #5-22
+    X = np.random.randn(*(N, N))
+    X =(1.-np.eye(N))*(np.tril(X) + np.tril(X).T)
+
+elif datatype is 'karate':
+    Akarate = np.array([   [ 0.,  0.,  1.,  1.,  1.,  1.,  1.,  1.,  1.,  0.,  1.,  1.,  1., 1.,  0.,  0.,  0.,  1.,  0.,  1.,  0.,  1.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  1.,  0.,  0.],
+        [ 0.,  0.,  1.,  1.,  0.,  0.,  0.,  1.,  0.,  0.,  0.,  0.,  0., 1.,  0.,  0.,  0.,  1.,  0.,  1.,  0.,  1.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  1.,  0.,  0.,  0.],
+        [ 1.,  1.,  0.,  1.,  0.,  0.,  0.,  1.,  1.,  1.,  0.,  0.,  0., 1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  1.,  1.,  0.,  0.,  0.,  1.,  0.],
+        [ 1.,  1.,  1.,  0.,  0.,  0.,  0.,  1.,  0.,  0.,  0.,  0.,  1., 1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.],
+        [ 1.,  0.,  0.,  0.,  0.,  0.,  1.,  0.,  0.,  0.,  1.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.],
+        [ 1.,  0.,  0.,  0.,  0.,  0.,  1.,  0.,  0.,  0.,  1.,  0.,  0., 0.,  0.,  0.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.],
+        [ 1.,  0.,  0.,  0.,  1.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.],
+        [ 1.,  1.,  1.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.],
+        [ 1.,  0.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  1.,  0.,  1.,  1.],
+        [ 0.,  0.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  1.],
+        [ 1.,  0.,  0.,  0.,  1.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.],
+        [ 1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.],
+        [ 1.,  0.,  0.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.],
+        [ 1.,  1.,  1.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  1.],
+        [ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  1.,  1.],
+        [ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  1.,  1.],
+        [ 0.,  0.,  0.,  0.,  0.,  1.,  1.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.],
+        [ 1.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.],
+        [ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  1.,  1.],
+        [ 1.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  1.],
+        [ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  1.,  1.],
+        [ 1.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.],
+        [ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  1.,  1.],
+        [ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  1., 0.,  1.,  0.,  1.,  0.,  0.,  1.,  1.],
+        [ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  1., 0.,  1.,  0.,  0.,  0.,  1.,  0.,  0.],
+        [ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  1.,  1.,  0., 0.,  0.,  0.,  0.,  0.,  1.,  0.,  0.],
+        [ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  1.,  0.,  0.,  0.,  1.],
+        [ 0.,  0.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  1.,  1.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  1.],
+        [ 0.,  0.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  1.,  0.,  1.],
+        [ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  1.,  0.,  0., 1.,  0.,  0.,  0.,  0.,  0.,  1.,  1.],
+        [ 0.,  1.,  0.,  0.,  0.,  0.,  0.,  0.,  1.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  1.,  1.],
+        [ 1.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0., 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  1.,  1., 0.,  0.,  1.,  0.,  0.,  0.,  1.,  1.],
+        [ 0.,  0.,  1.,  0.,  0.,  0.,  0.,  0.,  1.,  0.,  0.,  0.,  0., 0.,  1.,  1.,  0.,  0.,  1.,  0.,  1.,  0.,  1.,  1.,  0.,  0., 0.,  0.,  0.,  1.,  1.,  1.,  0.,  1.],
+        [ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  1.,  1.,  0.,  0.,  0., 1.,  1.,  1.,  0.,  0.,  1.,  1.,  1.,  0.,  1.,  1.,  0.,  0., 1.,  1.,  1.,  1.,  1.,  1.,  1.,  0.]])
+    X = Akarate[:N, :N]
+
+init_types = ['random', 'expectation'] #rank1
 cores = {t: {} for t in init_types}
 q = {t: {} for t in init_types}
 softelbo = {t: {} for t in init_types}
@@ -63,32 +105,34 @@ with tf.name_scope("model"):
                 with tf.name_scope("rank"+str(R)):
                     if coretype is 'Tcanon':
                         ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))#(1,) + tuple() + (1,)
-                        cores[init][R] = tn.Canonical(N, K, ranks, orthogonalstyle=tn.CayleyOrthogonal)
+                        cores[init][R] = [tn.Canonical(N, K, ranks, orthogonalstyle=tn.CayleyOrthogonal) for copy in range(copies)]
                     elif coretype is 'Tperm':
                         ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
                         repranks = (1,)+tuple(min((2)**min(r, N-r-2)*K, R) for r in range(N-1))+(1,)
-                        cores[init][R] = tn.PermutationCore_augmented(N, K, repranks, ranks)
+                        cores[init][R] = [tn.PermutationCore_augmented(N, K, repranks, ranks) for copy in range(copies)]
                     else:
                         ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
-                        cores[init][R] = tn.Core(N, K, ranks)
-                    q[init][R] = tn.MPS(N, K, ranks, cores=cores[init][R])
-                    softelbo[init][R] = tf.reduce_mean(q[init][R].elbo(lambda sample: p.batch_logp(sample, Xt), nsamples=nsamples, fold=False))
+                        cores[init][R] = [tn.Core(N, K, ranks)  for copy in range(copies)]
+                    q[init][R] = [tn.MPS(N, K, ranks, cores=core) for core in cores[init][R]]
+                    softelbo[init][R] = [tf.reduce_mean(qi.elbo(lambda sample: p.batch_logp(sample, Xt), nsamples=nsamples, fold=False)) for qi in q[init][R]]
                     #softelbo[init][R] = tf.reduce_mean(q[init][R].elbo(lambda sample: 0., nsamples=nsamples, fold=False))
                     if init is 'random':
                         mode_loss = tf.convert_to_tensor(np.array(0.).astype('float64'))
                     elif init is 'rank1':
-                        mode_loss = tf.reduce_sum(tn.norm_rank1(q[init][R], tf.nn.softmax(Zr))) 
+                        mode_loss = [tf.reduce_sum(tn.norm_rank1(qi, tf.nn.softmax(Zr))) for qi in q[init][R]]
                     elif init is 'entropy':
-                        mode_loss = -(q[init][R].marginalentropy())
+                        mode_loss = [-(qi.marginalentropy()) for qi in q[init][R]]
                     elif init is 'expectation':
-                        mode_loss = -tf.reduce_sum(q[init][R].batch_contraction(tf.nn.softmax(Zr)))
+                        mode_loss = [-tf.reduce_sum(qi.batch_contraction(tf.nn.softmax(Zr))) for qi in q[init][R]]
                     #mode_loss = tf.convert_to_tensor(np.array(0.).astype('float64'))
-                    init_opt[init][R] = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=cores[init][R].params())
-                    #init_opt[init][R] = tf.contrib.opt.ScipyOptimizerInterface()
-                    opt[init][R] = tf.train.AdamOptimizer(learning_rate=rate)
-                    step[init][R] = opt[init][R].minimize(-softelbo[init][R], var_list=cores[init][R].params())
-                    tf.summary.scalar('ELBO', softelbo[init][R])
-                    step_list += [step[init][R]]
+                    init_opt[init][R] = [tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=core.params()) for core in cores[init][R]]
+                    opt[init][R] = [tf.train.AdamOptimizer(learning_rate=rate) for copy in range(copies)]
+                    step[init][R] = [opti.minimize(-softelboi, var_list=core.params()) for opti, softelboi, core in zip(opt[init][R], softelbo[init][R], cores[init][R])]
+                    for copy in range(copies):
+                        tf.summary.scalar('ELBO{}'.format(copy), softelbo[init][R][copy])
+                    if copies>1:
+                        tf.summary.scalar('ELBO_mean', tf.reduce_mean(softelbo[init][R]))
+                    step_list += step[init][R]
 
 
 
@@ -127,7 +171,8 @@ with tf.name_scope("model"):
             print('Initializing...')
             for init in init_types:
                 for R in tqdm.tqdm(maxranks):
-                    init_opt[init][R].minimize(sess)
+                    for copy in range(copies):
+                        init_opt[init][R][copy].minimize(sess)
             
             print('Starting gradient ascent...')
             for it in tqdm.tqdm(range(steps), desc='Optimization step', total=steps, leave=False):

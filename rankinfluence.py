@@ -12,22 +12,23 @@ import tensornets as tn
 from edward.models import MultivariateNormalTriL, Dirichlet, WishartCholesky, ParamMixture
 
 name = 'report'
-datatype = 'karate'
+datatype = 'random'
 coretype = 'Tcanon' #'Tperm', 'Tcanon', ''
-N = 34
+N = 10
 K = 3
-maxranks = [1, 9, 27]#[1,6,9,12,15,18,21,24]
+maxranks = [1, 3, 9, 27]#[1,6,9,12,15,18,21,24]
 nsamples=100
 steps = 10000
 runs = 10
 version = 1
 rate = 0.001
 
-folder = name + '{}V{}N{}K{}S{}R{}'.format(coretype,version, N, K, nsamples, '-'.join(str(rank) for rank in maxranks))
+folder = name + '{}D{}V{}N{}K{}S{}R{}'.format(coretype,datatype,version, N, K, nsamples, '-'.join(str(rank) for rank in maxranks))
 #cap core rank at R
 
 timeit = False
-calculate_true = False
+calculate_true = True
+histograms = False
 
 if datatype is 'random':
     np.random.seed(1)
@@ -106,18 +107,25 @@ with tf.name_scope("model"):
             q[R] = tn.MPS(N, K, ranks, cores=cores[R])
             elbo, loss, entropy, marginalentropy, marginalcv = (q[R].elbo(lambda sample: p.batch_logp(sample, Xt), nsamples=nsamples, fold=False, report=True))
             softelbo[R] = tf.reduce_mean(elbo)
+            
+            mode_loss = -(q[R].marginalentropy())
+            init_opt[R] = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=cores[R].params())
+                                
             #softelbo[R] = tf.reduce_mean(q[R].elbo(lambda sample: p.batch_logp(sample, Xt), nsamples=nsamples, fold=False))
             opt[R] = tf.train.AdamOptimizer(learning_rate=rate)
             step[R] = opt[R].minimize(-softelbo[R], var_list=cores[R].params())
-            tf.summary.histogram('ELBO', elbo)
-            tf.summary.histogram('logp', loss)
-            tf.summary.histogram('entropy', entropy)
-            tf.summary.histogram('marginalentropy', marginalentropy)
-            tf.summary.histogram('cv', marginalcv)
-
-
-
-
+            tf.summary.scalar('ELBO', tf.reduce_mean(elbo))
+            tf.summary.scalar('logp', tf.reduce_mean(loss))
+            tf.summary.scalar('entropy', tf.reduce_mean(entropy))
+            tf.summary.scalar('marginalentropy', tf.reduce_mean(marginalentropy))
+            tf.summary.scalar('cv', tf.reduce_mean(marginalcv))
+            if histograms:
+                tf.summary.histogram('ELBO', elbo)
+                tf.summary.histogram('logp', loss)
+                tf.summary.histogram('entropy', entropy)
+                tf.summary.histogram('cventropy', entropy+marginalcv)
+                tf.summary.histogram('marginalentropy', marginalentropy)
+                tf.summary.histogram('cv', marginalcv)
 
     if timeit:
         run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
@@ -148,8 +156,8 @@ with tf.name_scope("model"):
             sess.run(init)
             #mode_opt.minimize(sess)
             #print('Initializing...')
-            #for R in tqdm.tqdm(maxranks):
-            #    init_opt[R].minimize(sess)
+            for R in tqdm.tqdm(maxranks):
+                init_opt[R].minimize(sess)
             
             print('Starting gradient ascent...')
             for it in tqdm.tqdm(range(steps), desc='Optimization step', total=steps, leave=False):

@@ -106,7 +106,7 @@ class CollapsedMultipartite(CollapsedMixture):
         return logp_cond
 
     @tfmethod(1)
-    def populatetensor(self, X, normalize=True):
+    def populatetensor(self, X, probability=True):
         sess = tf.get_default_session()
         shapes = [N*(K, ) for N, K in zip(self.Ns, self.Ks)]
         shape = tuple(chain(*shapes))
@@ -123,7 +123,7 @@ class CollapsedMultipartite(CollapsedMixture):
             """Compute softmax values for each sets of scores in x."""
             e_x = np.exp(x - np.max(x))
             return e_x / e_x.sum()
-        if normalize:
+        if probability:
             return np.reshape(softmax(Zstar_vec), shape)
         else:
             return np.reshape(Zstar_vec, shape)
@@ -160,11 +160,27 @@ class CollapsedStochasticBlock(CollapsedMixture):
                                                   axis=2)))
         return lnprior + lnlink
 
+    def sample(self):
+        w = tf.distributions.Dirichlet(alpha*tf.ones(self.K, dtype=dtype)).sample()
+        Z = tf.distributions.Multinomial(1., w).sample(self.N)
+        beta = tf.distributions.Beta(tf.cast(self.a, dtype), tf.cast(self.b, dtype)).sample((self.K, self.K))
+        linkprob = tf.matmul(Z, tf.matmul(beta, tf.transpose(Z)))
+        X = tf.distributions.Bernoulli(linkprob).sample()
+        return (w, Z, beta, X)
+
+    def conditional_sample(self, Z):
+        beta = tf.distributions.Beta(tf.cast(self.a, dtype), tf.cast(self.b, dtype)).sample((self.K, self.K))
+        linkprob = tf.matmul(Z, tf.matmul(beta, tf.transpose(Z)))
+        X = tf.distributions.Bernoulli(linkprob).sample()
+        return (beta, X)
+
+
     @tfmethod(2)
     def batch_logp(self, Z, X, observed=None):
         if observed is None:
             observed = tf.ones((self.N, self.N), dtype=dtype)
-
+        else:
+            observed = tf.convert_to_tensor(observed, dtype)
         membership = tf.reduce_sum(Z, axis=1, keep_dims=True)
         edgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed*X, Z) #Z^T*X*Z
         notedgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed, Z) - edgecounts
@@ -179,6 +195,27 @@ class CollapsedStochasticBlock(CollapsedMixture):
                                                   self.b + tf.zeros_like(notedgecounts)],
                                                   axis=2)), axis=[1,2])
         return lnprior + lnlink
+
+
+    @tfmethod(2)
+    def batch_logpred(self, Z, X, observed=None):
+        if observed is None:
+            observed = tf.ones((self.N, self.N), dtype=dtype)
+        else:
+            observed = tf.convert_to_tensor(observed, dtype)
+        membership = tf.reduce_sum(Z, axis=1, keep_dims=True)
+        edgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed*X, Z) #Z^T*X*Z
+        notedgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed, Z) - edgecounts
+
+
+        lnlink = tf.reduce_sum(tf.lbeta(tf.stack([self.a + edgecounts,
+                                                  self.b + notedgecounts],
+                                                  axis=2)) -
+                               tf.lbeta(tf.stack([self.a + tf.zeros_like(edgecounts),
+                                                  self.b + tf.zeros_like(notedgecounts)],
+                                                  axis=2)), axis=[1,2])
+        return lnlink
+
 
 class CollapsedBipartiteStochasticBlock(CollapsedMultipartite):
     def __init__(self, Ns, Ks, alpha0=1., a=1., b=1.):
