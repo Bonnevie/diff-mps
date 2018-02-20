@@ -2,12 +2,9 @@ import numpy as np
 import tensorflow as tf
 from itertools import product, chain
 from tfutils import tffunc, tfmethod
-#import variationaltensortrain as vtt
 
 import tqdm
-
 EPS = 1e-16
-
 
 dtype='float64'
 

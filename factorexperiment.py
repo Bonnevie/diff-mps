@@ -20,11 +20,11 @@ do_anneal = False #do entropy annealing
 name = 'canon' 
 datatype = 'random' #'random', 'blocked', or 'karate'
 version = 1
-N = 14 #number of vertices in graph
+N = 5 #number of vertices in graph
 Ntest = 0 #number of edges to use for testing
 K = 3 #number of communities to look for
 nsamples=50 #number of gradient samples per iteration
-steps = 20000 #number of optimization iterations
+steps = 0 #number of optimization iterations
 decay_steps = 600 #number of steps between learning rate decay
 anneal_decay_steps = 100 #number of steps beteween anneal decay
 rate = 0.001 #learning rate used in optimizer
@@ -161,10 +161,9 @@ with tf.name_scope("model"):
                 else:
                     anneal_invtemp = 1.
                 q[configc] = tn.MPS(N, K, ranks, cores=cores[configc])
-                cvweight = RollingAlpha(0.05)
+                cvweight = 1.
                 objective, elbo, loss, entropy, marginalentropy, marginalcv = (q[configc].elbo(lambda sample: p.batch_logp(sample, Xt, observed=mask), nsamples=nsamples, fold=False, report=True, cvweight=cvweight.alpha(), invtemp=anneal_invtemp))
                 pred = q[configc].pred(lambda sample: p.batch_logp(sample, Xt, observed=~mask), nsamples=nsamples, fold=False)
-                alpha_update[configc] = cvweight.update_op((loss + anneal_invtemp*entropy), (marginalcv))
                 softpred[configc] = tf.reduce_mean(pred)
                 softelbo[configc] = tf.reduce_mean(elbo)
                 softobj[configc] = tf.reduce_mean(objective)
@@ -201,13 +200,12 @@ with tf.name_scope("model"):
                                 tf.summary.scalar('pred', tf.reduce_mean(pred)),
                                 tf.summary.scalar('logp', tf.reduce_mean(loss)),
                                 tf.summary.scalar('entropy', tf.reduce_mean(entropy)),
-                                tf.summary.scalar('marginalentropy', tf.reduce_mean(marginalentropy)),
-                                tf.summary.scalar('cvweight', cvweight.alpha())]
+                                tf.summary.scalar('marginalentropy', tf.reduce_mean(marginalentropy))]
     if timeit:
         run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
         run_metadata = tf.RunMetadata()
 
-    train = tf.group(*step.values(), *alpha_update.values())
+    train = tf.group(*step.values())
 
     summaries = [tf.summary.merge(copy_summary_n) for copy_summary_n in copy_summary]
     sess = tf.Session()

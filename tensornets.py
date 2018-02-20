@@ -177,7 +177,7 @@ def batch_inner_contraction(density, core, weights = None, opt_einsum=False):
         else:
             return tf.einsum('krs,bsu,kut', tf.transpose(core, [0,2,1]), density, core)
 
-def save(name, mps, folder='', sess=None):
+def packmps(name, mps, sess=None):
     mps_metadata = {
                 'N': mps.N,
                 'K': mps.K,
@@ -201,35 +201,36 @@ def save(name, mps, folder='', sess=None):
           core_type is CanonicalPermutationCore2):
         core_metadata.update({'orthogonalstyle': mps.raw.orthogonalstyle})
 
-    saver = tf.train.Saver(mps.raw.params(), max_to_keep=None)
-    basic_metadata = {'core_type': core_type, 'name': name, 'folder': folder, 'save_path': saver.save(sess, folder + name + '.ckpt')}
+
+    #saver = tf.train.Saver(mps.raw.params(), max_to_keep=None)
+    basic_metadata = {'core_type': core_type, 'name': name}#, 'save_path': saver.save(sess, folder + name + '.ckpt')}
     if sess is None:
         sess = tf.get_default_session()
     hardcopy = [sess.run(param) for param in mps.raw.params()]
 
     metadata = {'basic': basic_metadata, 'hardcopy': hardcopy,
                 'core': core_metadata, 'mps': mps_metadata}
+    return metadata
+    
+def dictpack(name, dictionary, folder='', sess=None):
+    new_d = {key: packmps(name+'_key{}'.format(key), value) for key, value in dictionary.items()} 
     with open(folder + name+'.pkl', 'wb') as handle:
-        pickle.dump(metadata, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        pickle.dump(new_d, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-def restore(filename, sess = None, hardrestore=False):
-    with open(filename, 'rb') as handle:
-        metadata = pickle.load(handle)
+def unpackmps(metadata):
     cores = metadata['basic']['core_type'](**metadata['core'])
-    mps = MPS(**metadata['mps'], cores=cores)
+    mps = tn.MPS(**metadata['mps'], cores=cores)
+    mass_assign = ([tf.assign(var, value)
+                    for var, value in
+                    zip(cores.params(), metadata['hardcopy'])] +
+                    [tf.assign(var, value)
+                    for var, value in
+                    zip(cores.params(), metadata['hardcopy'])])
     if sess is None:
         sess = tf.get_default_session()
-    if hardrestore:
-        mass_assign = ([tf.assign(var, value)
-                       for var, value in
-                       zip(cores.params(), metadata['hardcopy'])] +
-                       [tf.assign(var, value)
-                        for var, value in
-                        zip(cores.params(), metadata['hardcopy'])])
-    else:
-        saver = tf.train.Saver()
-        saver.restore(sess, metadata['save_path'])
-    return (mps, cores, metadata)
+    sess.run(mass_assign)
+    return (mps, cores, mass_assign, metadata)
+>>>>>>> Stashed changes
 
 class MPS:
     """
