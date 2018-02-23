@@ -76,12 +76,7 @@ class CollapsedMixture:
         logpx = self.logp(Z, X)
         for ind in tqdm.tqdm(np.ndindex(shape), total=size):
              Zstar_vec[np.ravel_multi_index(ind, shape)] = sess.run(logpx, feed_dict={Z: np.eye(self.K, dtype=np.float32)[ind, :]})
-        #Zstar_vec = tf.map_fn(lambda Z: self.logp(Z, X), tf.stack([]))
-        def softmax(x):
-            """Compute softmax values for each sets of scores in x."""
-            e_x = np.exp(x - np.max(x))
-            return e_x / e_x.sum()
-        return np.reshape(softmax(Zstar_vec), self.N*(self.K,))
+        return np.reshape(Zstar_vec, shape)
 
 class CollapsedMultipartite(CollapsedMixture):
     def __init__(self, Ns, Ks):
@@ -115,15 +110,7 @@ class CollapsedMultipartite(CollapsedMixture):
 
         for ind in tqdm.tqdm(product(*[np.ndindex(shape) for shape in shapes]), total=size):
              Zstar_vec[np.ravel_multi_index(tuple(chain(*ind)), shape)] = sess.run(logpx, feed_dict=dict(zip(Zs, [np.eye(K, dtype=dtype)[indi, :] for indi, K in zip(ind, self.Ks)])))
-        #Zstar_vec = tf.map_fn(lambda Z: self.logp(Z, X), tf.stack([]))
-        def softmax(x):
-            """Compute softmax values for each sets of scores in x."""
-            e_x = np.exp(x - np.max(x))
-            return e_x / e_x.sum()
-        if probability:
-            return np.reshape(softmax(Zstar_vec), shape)
-        else:
-            return np.reshape(Zstar_vec, shape)
+        return np.reshape(Zstar_vec, shape)
 
 class CollapsedStochasticBlock(CollapsedMixture):
     def __init__(self, N, K, alpha=1., a=1., b=1.):
@@ -145,9 +132,9 @@ class CollapsedStochasticBlock(CollapsedMixture):
         edgecounts = tf.einsum('mk,mn,nl', Z, observed*X, Z) #Z^T*X*Z
         notedgecounts = tf.einsum('mk,mn,nl', Z, observed, Z) - edgecounts
 
-        lnprior = tf.reduce_sum(tf.lbeta(tf.transpose(self.alpha +
+        lnprior = tf.reduce_sum(tf.lbeta((self.alpha +
                                                       membership)) -
-                                tf.lbeta(tf.transpose(self.alpha +
+                                tf.lbeta((self.alpha +
                                                       tf.zeros_like(membership))))
         lnlink = tf.reduce_sum(tf.lbeta(tf.stack([self.a + edgecounts,
                                                   self.b + notedgecounts],
@@ -187,10 +174,10 @@ class CollapsedStochasticBlock(CollapsedMixture):
                              tf.lbeta(self.alpha + tf.zeros_like(membership)))
         lnlink = tf.reduce_sum(tf.lbeta(tf.stack([self.a + edgecounts,
                                                   self.b + notedgecounts],
-                                                  axis=2)) -
+                                                  axis=3)) -
                                tf.lbeta(tf.stack([self.a + tf.zeros_like(edgecounts),
                                                   self.b + tf.zeros_like(notedgecounts)],
-                                                  axis=2)), axis=[1,2])
+                                                  axis=3)), axis=[1,2])
         return lnprior + lnlink
 
 

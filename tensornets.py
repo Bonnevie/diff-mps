@@ -596,6 +596,36 @@ class MPS:
             return (objective, elbo, llk, entropy, marginalentropy, marginalcv)
         else:
             return elbo
+
+    @tfmethod(0)
+    def elbowithmodes(self, f, modes, nsamples=1, fold=False, marginal=True, invtemp=1., cvweight=1., report=False):
+        '''calculate ELBO or another entropy-weighted expectation using nsamples MC samples'''
+        samples = self.softsample(nsamples)
+        if fold:
+            llk = tf.map_fn(f, samples)
+            modellk = tf.map_fn(f, modes)
+        else:
+            llk = f(samples)
+            modellk = f(modes)
+
+        if marginal:
+            marginals = self.marginals()
+            marginalentropy = -tf.reduce_sum(marginals * tf.log(1e-16+marginals))
+            marginalcv = (marginalentropy +
+                          tf.reduce_sum(samples *
+                                        tf.log(1e-16+marginals)[None, :, :],
+                                        axis=[1, 2]))
+        else:
+            marginalcv = 0.
+        entropy = -tf.log(1e-16+self.batch_contraction(samples))
+        modeweight = self.batch_contraction(modes)
+        modeentropy = -tf.log(1e-16+modeweight)
+        elbo = llk + entropy + cvweight*marginalcv
+        objective = llk + invtemp*(entropy + cvweight*marginalcv)  + tf.reduce_sum(modeweight*(modellk+modeentropy))
+        if report:
+            return (objective, elbo, llk, entropy, marginalentropy, marginalcv)
+        else:
+            return objective
     #def totalcorrelation(self, nsamples=5):
     #    sample =
     #    return tf.log(self.contraction())
@@ -757,6 +787,9 @@ class Core:
     def scaledcores(self, factor):
         nroot = tf.exp((1./self.N)*tf.log(factor))
         return [nroot*core for core in self.cores]
+
+    def params(self):
+        return self.cores
 
 class Canonical(Core):
     '''
