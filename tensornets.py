@@ -400,11 +400,10 @@ class MPS:
         return tf.squeeze(shadowb)
 
     @tfmethod(0)
-    def sample(self, doshadowsample=False, coupled=False):
+    def sample(self, nsamples=1, doshadowsample=False, coupled=False):
         '''Runs ancestral sampling routine and calculates necessary
         reparameterized quantities for a REBAR estimator.
-        See shadowsample() for more info on shadow MPS.
-
+        See softsample() for more info on shadow MPS.
         Args:
             shadowsample (defaults to False): Boolean. If False, return a
                 sample from MPS, if True, return a tuple of samples from MPS
@@ -419,46 +418,57 @@ class MPS:
             conditionalshadowb (if doshadowsample==True): Same as shadowb, except
                 conditioned on the vaulue of b being observed.
         '''
-        condition = tf.ones((1, 1), dtype=dtype)
+        
+
+        condition = tf.ones((nsamples, 1, 1), dtype=dtype)
         samples = []
-        sequence = zip(self.cores, self.outer_marginal)
 
         if doshadowsample:
-            shadowcondition = tf.ones((1, 1), dtype=dtype)
+            shadowcondition = tf.ones((nsamples, 1, 1), dtype=dtype)
             shadowsamples = []
             conditionalshadowsamples = []
 
+
+        if self.left_canonical:
+            sequence = zip([tf.transpose(c, [0,2,1]) for c in self.cores[-1::-1]],
+                           self.inner_marginal[-1::-1])
+        else:
+            sequence = zip(self.cores, self.outer_marginal)
+
         for index, (core, marginal) in enumerate(sequence):
-            if self.right_canonical:
-                distribution = tf.trace(inner_broadcast(condition, core))
+            if self.right_canonical or self.left_canonical:
+                distribution = tf.trace(
+                    batch_inner_broadcast(condition, core))
             else:
-                distribution = tf.einsum('kij,ji', inner_broadcast(condition,
-                                                                   core),
-                                         marginal)
+                distribution = tf.einsum(
+                    'bkij,ji', batch_inner_broadcast(condition, core),
+                    marginal)
+
             reparam = CategoricalReparam(
-                tf.expand_dims(tf.log(distribution) -
-                               tf.reduce_logsumexp(distribution), 0),
-                coupled=coupled, temperature=self.temperatures[index])
+                tf.log(1e-16+distribution),
+                temperature=self.temperatures[index])
 
             sample = reparam.b
             samples += [sample]
 
-            update = tf.einsum('kij,k', core, tf.squeeze(sample))
-            condition = tf.einsum('ik,kl,lj', tf.transpose(update),
-                                  condition, update)
+            update = tf.einsum('kij,bk', core,
+                                     sample)
+            condition = tf.einsum('bik,bkl,blj->bij',
+                                        tf.transpose(update, [0,2,1]),
+                                        condition, update)
 
             if doshadowsample:
-                if self.right_canonical:
+                if self.right_canonical or self.left_canonical:
                     shadowdistribution = tf.trace(
-                        inner_broadcast(shadowcondition, core))
+                        batch_inner_broadcast(shadowcondition, core))
                 else:
                     shadowdistribution = tf.einsum(
-                        'kij,ji', inner_broadcast(shadowcondition, core),
+                        'bkij,ji', batch_inner_broadcast(shadowcondition, core),
                         marginal)
 
                 shadowreparam = CategoricalReparam(
-                    tf.expand_dims(tf.log(shadowdistribution) -
-                                   tf.reduce_logsumexp(shadowdistribution), 0),
+                                    tf.log(shadowdistribution) -
+                                   tf.reduce_logsumexp(shadowdistribution, keepdims=True),
                     noise=reparam.u, cond_noise=reparam.v,
                     temperature=self.temperatures[index])
 
@@ -471,19 +481,23 @@ class MPS:
                     sb, shadowreparam.temperature)
                 conditionalshadowsamples += [conditionalshadowsample]
 
-                shadowupdate = tf.einsum('kij,k', core,
-                                         tf.squeeze(shadowsample))
-                shadowcondition = tf.einsum('ik,kl,lj',
-                                            tf.transpose(shadowupdate),
+                shadowupdate = tf.einsum('kij,bk', core, shadowsample)
+                shadowcondition = tf.einsum('bik,bkl,blj->bij',
+                                            tf.transpose(shadowupdate, [0,2,1]),
                                             shadowcondition, shadowupdate)
-
-        b = tf.concat(samples, axis=0)
+        
+        if self.left_canonical:
+            samples = samples[-1::-1]    
+        b = tf.transpose(tf.stack(samples), [1,0,2])
         if doshadowsample:
-            shadowb = tf.concat(shadowsamples, axis=0)
-            conditionalshadowb = tf.concat(conditionalshadowsamples, axis=0)
-
+            if self.left_canonical:
+                shadowsamples = shadowsamples[-1::-1]    
+                conditionalshadowsamples = conditionalshadowsamples[-1::-1]    
+            shadowb = tf.transpose(tf.stack(shadowsamples), [1,0,2])
+            conditionalshadowb = tf.transpose(tf.stack(conditionalshadowsamples), [1,0,2])
+            
         return (b, shadowb, conditionalshadowb) if doshadowsample else b
-
+        
     @tfmethod(1)
     def gibbsconditionals(self, Z, logprob=True, normalized=True):
         #cores = [tf.einsum('kij,k', core, tf.squeeze(z))
