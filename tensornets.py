@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import pickle
 from relaxflow.reparam import CategoricalReparam, categorical_forward, categorical_backward
 dtype = 'float64'
 
@@ -217,9 +218,9 @@ def dictpack(name, dictionary, folder='', sess=None):
     with open(folder + name+'.pkl', 'wb') as handle:
         pickle.dump(new_d, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-def unpackmps(metadata):
+def unpackmps(metadata, sess=None):
     cores = metadata['basic']['core_type'](**metadata['core'])
-    mps = tn.MPS(**metadata['mps'], cores=cores)
+    mps = MPS(**metadata['mps'], cores=cores)
     mass_assign = ([tf.assign(var, value)
                     for var, value in
                     zip(cores.params(), metadata['hardcopy'])] +
@@ -305,6 +306,9 @@ class MPS:
             self.inner_marginal = [initial, *inner_marg]
             self.outer_marginal = [*outer_marg[-1::-1], initial]
 
+    def set_temperature(self, value):
+        return tf.assign(self._tempvar, np.log(np.exp(value)-1.))
+
     @tfmethod(1)
     def contraction(self, Z, normalized=True):
         """
@@ -334,24 +338,27 @@ class MPS:
         return tf.squeeze(S)
 
     @tfmethod(0)
-    def buildcontrol(self, f, nsamples=1):
+    def buildcontrol(self, f, fhat =None, nsamples=1, fold=False):
         '''Runs ancestral sampling routine on MPS and auxiliary shadow model
         and calculates necessary reparameterized quantities for a
         RELAX estimator.
         '''
-        loss = 0. # f(b)
-        control = 0. # f(shadowb)
-        conditional_control = 0. # f(conditionalshadowb)
-        logp = 0. # tf.log(self.contraction(b))
-        for it in range(nsamples):
-            b, shadowb, conditionalshadowb = self.sample(doshadowsample=True)
-            loss += f(b)
-            control += f(shadowb)
-            conditional_control += f(conditionalshadowb)
-            logp += tf.log(self.contraction(b))
+        if fhat is None:
+            fhat = f
+        b, shadowb, conditionalshadowb = self.sample(nsamples, doshadowsample=True)
+        if fold:
+            loss = tf.map_fn(f, b)
+            control = tf.map_fn(fhat, shadowb)
+            conditional_control = tf.map_fn(fhat, condtionalshadowb)
+            logp = tf.log(tf.map_fn(self.contraction, b))
+        else:
+            loss = f(b)
+            control = fhat(shadowb)
+            conditional_control = fhat(shadowb)
+            logp = tf.log(self.batch_contraction(b))
+        return (tf.reduce_mean(loss), self.nu*tf.reduce_mean(control), self.nu*tf.reduce_mean(conditional_control), tf.reduce_mean(logp))
 
-        return (loss/nsamples, self.nu*control/nsamples,
-                self.nu*conditional_control/nsamples, logp/nsamples)
+
 
     @tfmethod(0)
     def softsample(self, nsamples=1):
@@ -590,9 +597,12 @@ class MPS:
         return entropy(marginals)
 
     @tfmethod(0)
-    def elbo(self, f, nsamples=1, fold=False, marginal=True, invtemp=1., cvweight=1., report=False):
+    def elbo(self, f, nsamples=1, fold=False, differentiable=True, marginal=True, invtemp=1., cvweight=1., report=False):
         '''calculate ELBO or another entropy-weighted expectation using nsamples MC samples'''
-        samples = self.softsample(nsamples)
+        if differentiable:
+            samples = self.softsample(nsamples)
+        else:
+            samples = self.sample(nsamples)
         if fold:
             llk = tf.map_fn(f, samples)
         else:
