@@ -67,13 +67,15 @@ class CollapsedMixture:
         return tf.map_fn(lambda x: tf.map_fn(logpx, x, dtype=dtype), Zi, dtype=dtype) #<--
 
     @tfmethod(1)
-    def populatetensor(self, X, sess=None):
+    def populatetensor(self, X, observed=None, sess=None):
         sess = tf.get_default_session()
+        if observed is None:
+            observed = self._defaultobserved
         shape = self.N*(self.K,)
         size = self.K**self.N
         Zstar_vec = np.zeros(size, dtype=dtype)
         Z = tf.placeholder(dtype=dtype, shape=(self.N, self.K))
-        logpx = self.logp(Z, X)
+        logpx = self.logp(Z, X, observed=observed)
         for ind in tqdm.tqdm(np.ndindex(shape), total=size):
              Zstar_vec[np.ravel_multi_index(ind, shape)] = sess.run(logpx, feed_dict={Z: np.eye(self.K, dtype=np.float32)[ind, :]})
         return np.reshape(Zstar_vec, shape)
@@ -98,7 +100,9 @@ class CollapsedMultipartite(CollapsedMixture):
         return logp_cond
 
     @tfmethod(1)
-    def populatetensor(self, X, probability=True):
+    def populatetensor(self, X, observed=None):
+        if observed is None:
+            observed = self._defaultobserved
         sess = tf.get_default_session()
         shapes = [N*(K, ) for N, K in zip(self.Ns, self.Ks)]
         shape = tuple(chain(*shapes))
@@ -106,7 +110,7 @@ class CollapsedMultipartite(CollapsedMixture):
 
         Zstar_vec = np.zeros(size, dtype=dtype)
         Zs = [tf.placeholder(dtype=dtype, shape=(N, K)) for N, K in zip(self.Ns, self.Ks)]
-        logpx = self.logp(Zs, X)
+        logpx = self.logp(Zs, X, observed=observed)
 
         for ind in tqdm.tqdm(product(*[np.ndindex(shape) for shape in shapes]), total=size):
              Zstar_vec[np.ravel_multi_index(tuple(chain(*ind)), shape)] = sess.run(logpx, feed_dict=dict(zip(Zs, [np.eye(K, dtype=dtype)[indi, :] for indi, K in zip(ind, self.Ks)])))
@@ -118,6 +122,7 @@ class CollapsedStochasticBlock(CollapsedMixture):
         self.alpha = tf.convert_to_tensor(alpha, dtype=dtype)
         self.a = tf.convert_to_tensor(a, dtype=dtype)
         self.b = tf.convert_to_tensor(b, dtype=dtype)
+        self._defaultobserved = tf.convert_to_tensor(np.triu(np.ones((self.N, self.N), dtype=dtype), 1))
 
     @tfmethod(2)
     def logp(self, Z, X, observed=None):
@@ -126,7 +131,7 @@ class CollapsedStochasticBlock(CollapsedMixture):
             Z = Z[0]
 
         if observed is None:
-            observed = tf.ones((self.N, self.N), dtype=dtype)
+            observed = tf.convert_to_tensor(np.triu(np.ones((self.N, self.N), dtype=dtype), 1))
 
         membership = tf.reduce_sum(Z, axis=0, keep_dims=True)
         edgecounts = tf.einsum('mk,mn,nl', Z, observed*X, Z) #Z^T*X*Z
@@ -162,7 +167,7 @@ class CollapsedStochasticBlock(CollapsedMixture):
     @tfmethod(2)
     def batch_logp(self, Z, X, observed=None):
         if observed is None:
-            observed = tf.ones((self.N, self.N), dtype=dtype)
+            observed = self._defaultobserved
         else:
             observed = tf.convert_to_tensor(observed, dtype)
         membership = tf.reduce_sum(Z, axis=1, keep_dims=True)

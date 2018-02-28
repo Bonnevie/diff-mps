@@ -255,6 +255,9 @@ class MPS:
         self.N  = N
         self.K = K
         self.ranks = ranks
+        self.normalized = normalized
+        self.multi_temp = multi_temp
+        
         with tf.name_scope("auxiliary"):
             if cores:
                 self.raw = cores
@@ -497,7 +500,7 @@ class MPS:
             conditionalshadowb = tf.transpose(tf.stack(conditionalshadowsamples), [1,0,2])
             
         return (b, shadowb, conditionalshadowb) if doshadowsample else b
-        
+
     @tfmethod(1)
     def gibbsconditionals(self, Z, logprob=True, normalized=True):
         #cores = [tf.einsum('kij,k', core, tf.squeeze(z))
@@ -647,7 +650,7 @@ class MPS:
     @tfmethod(0)
     def pred(self, f, nsamples=1, fold=False):
         '''calculate expectation of function f over nsamples samples from model'''
-        samples = self.softsample(nsamples)
+        samples = self.sample(nsamples)
         if fold:
             llk = tf.map_fn(f, samples)
         else:
