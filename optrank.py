@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import pickle
 from relaxflow.reparam import CategoricalReparam
 import time
 dtype = 'float64'
@@ -42,6 +43,7 @@ short_key = False
 active_factors = [len(factor)>1 for factor in factors]
 all_config = list(product(*factors))
 config_count = np.prod([len(factor) for factor in factors])
+config_full_name = ''.join([code + '-'.join([str(fact) for fact in factor]) for code, factor in zip(factor_code, factors)])
 copy_writer = []
         
 np.random.seed(1)
@@ -162,9 +164,5 @@ with tf.name_scope("model"):
                 df_c['KL'][configc] = kl_c
 
 supdict = {'df_c':df_c, 'df_p':df_p, 'logZ': logZ, }
-
-plt.subplot(1,2,1)
-df_p.groupby('rank').mean().plot()
-plt.subplot(1,2,2)
-df_c.groupby('rank').mean().plot()
-
+with open(folder + config_full_name + '_optrank.pkl','wb') as handle:
+    pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
