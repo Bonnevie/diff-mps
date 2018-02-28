@@ -8,8 +8,6 @@ dtype = 'float64'
 import tqdm
 import pandas as pd
 
-import matplotlib.pyplot as plt
-
 from collapsedclustering import CollapsedStochasticBlock, KLcorrectedBound
 import tensornets as tn
 

@@ -1,12 +1,11 @@
 import numpy as np
 import tensorflow as tf
-from relaxflow.reparam import CategoricalReparam
+from relaxflow.relax import RELAX
+
 import time
 dtype = 'float64'
 
 import tqdm
-
-import matplotlib.pyplot as plt
 
 from collapsedclustering import CollapsedStochasticBlock, KLcorrectedBound
 import tensornets as tn
@@ -17,13 +16,13 @@ from itertools import product
 timeit = False #log compute time of every op for Tensorboard visualization (costly)
 calculate_true = True #calculate true tensor and MPS (WARNING: can cause OOM for N>>14)
 do_anneal = False #do entropy annealing
-name = 'lowrank' 
+name = 'relax' 
 datatype = 'random' #'random', 'blocked', or 'karate'
-version = 3
+version = 2
 N = 7 #number of vertices in graph
 Ntest = 0 #number of edges to use for testing
 K = 3 #number of communities to look for
-nsamples=100 #number of gradient samples per iteration
+nsamples=1000 #number of gradient samples per iteration
 steps = 10000 #number of optimization iterations
 decay_steps = 600 #number of steps between learning rate decay
 anneal_decay_steps = 100 #number of steps beteween anneal decay
@@ -31,6 +30,7 @@ projection_steps = 1 #how often to project
 rate = 0.001 #learning rate used in optimizer
 anneal_rate = 70. #initial annealing inverse temperature
 nmodes = 20 #modes to find using standard VB to use in initialization schemes
+temperature = 0.1
 
 folder = name + 'D{}V{}N{}K{}S{}'.format(datatype,version, N, K, nsamples)
 
@@ -44,13 +44,13 @@ inittypes = ['random'] #whether to run an initialization routine
 maxranks = [9]
 optimizers = ['Adam'] #optimizer to use for the stochastic gradients
 #Options are: 'SGD', 'Adadelta', 'Adam'
-objective = ['']
+objectives = ['relax']
 projection = [False]
 decay_rates = [0.95] #decay rates for learning rate
 anneal_rates = [1.] #decay rates for entropy annealing schedule
 
 factor_code = ['T','I','O','B', 'P', 'L','A','R']
-factors = [coretypes, inittypes, optimizers, objective, projection, decay_rates, anneal_rates, maxranks]
+factors = [coretypes, inittypes, optimizers, objectives, projection, decay_rates, anneal_rates, maxranks]
 short_key = True
 active_factors = [len(factor)>1 for factor in factors]
 all_config = product(*factors)
@@ -129,6 +129,7 @@ opt = {}
 step = {}
 equalize_ops = []
 init_opt = {}
+init_ops = {}
 proj_opt = {}
 alpha_update = {}
 qtensor = {}
@@ -184,6 +185,13 @@ with tf.name_scope("model"):
                     objective, elbo, loss, entropy, marginalentropy, marginalcv = (q[configc].elbo(lambda sample: p.batch_logp(sample, Xt, observed=mask), nsamples=nsamples, fold=False, report=True, cvweight=cvweight, invtemp=anneal_invtemp))
                 elif objective is 'modes':
                     objective, elbo, loss, entropy, marginalentropy, marginalcv = (q[configc].elbowithmodes(lambda sample: p.batch_logp(sample, Xt, observed=mask), anchors, nsamples=nsamples, fold=False, report=True, cvweight=cvweight, invtemp=anneal_invtemp))
+                elif objective is 'relax':
+                    relax_params = q[configc].buildcontrol(lambda sample: tf.reduce_mean(p.batch_logp(sample, Xt, observed=mask) - tf.log(1e-16+q[configc].batch_contraction(sample))), nsamples=nsamples, fold=False)
+                    objective, elbo, loss, entropy, marginalentropy, marginalcv = (q[configc].elbo(lambda sample: p.batch_logp(sample, Xt, observed=mask), nsamples=nsamples, differentiable=False, fold=False, report=True, cvweight=cvweight, invtemp=anneal_invtemp))
+                    grads, vargrads = RELAX(*relax_params, cores[configc].params(), var_params=q[configc].var_params()) 
+                elif objective is 'relax_neural':
+                    pass
+
                 #objective, elbo, loss, entropy, marginalentropy, marginalcv = (q[configc].elbowithmodes(lambda sample: p.batch_logp(sample, Xt, observed=mask), anchors, nsamples=nsamples, fold=False, report=True, cvweight=cvweight, invtemp=anneal_invtemp))
                 pred = q[configc].pred(lambda sample: p.batch_logp(sample, Xt, observed=predictionmask), nsamples=nsamples, fold=False)
                 softpred[configc] = tf.reduce_mean(pred)
@@ -202,7 +210,8 @@ with tf.name_scope("model"):
                     mode_loss = -(q[configc].marginalentropy())
                 elif init is 'expectation':
                     mode_loss = -tf.reduce_sum(tf.log(q[configc].batch_contraction(tf.nn.softmax(Z))))
-                    
+
+                init_ops[configc] = q[configc].set_temperature(temperature)
                 init_opt[configc] = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=cores[configc].params(),method='CG')
                 
                 if do_project:
@@ -211,15 +220,18 @@ with tf.name_scope("model"):
                     
                 #build optimizers
                 decayed_rate = tf.train.exponential_decay(tf.cast(rate, dtype), global_step, decay_steps, decay_rate, staircase=True)
+                if objective is not 'relax' and objective is not 'relax_neural':
+                    grads = zip(tf.gradients(-softobj[configc], cores[configc].params()), cores[configc].params())
+                
                 if opt_name is 'Adam':
                     opt[configc] = tf.train.AdamOptimizer(learning_rate=decayed_rate)
-                    step[configc] = opt[configc].minimize(-softobj[configc], var_list=cores[configc].params())
+                    step[configc] = opt[configc].apply_gradients(grads)#minimize(-softobj[configc], var_list=cores[configc].params())
                 elif opt_name is 'Adadelta':
                     opt[configc] = tf.train.AdamOptimizer(learning_rate=decayed_rate)
-                    step[configc] = opt[configc].minimize(-softobj[configc], var_list=cores[configc].params())
+                    step[configc] = opt[configc].apply_gradients(grads)#.minimize(-softobj[configc], var_list=cores[configc].params())
                 elif opt_name is 'SGD':
                     opt[configc] = tf.train.GradientDescentOptimizer(learning_rate=decayed_rate)
-                    step[configc] = opt[configc].minimize(-softobj[configc], var_list=cores[configc].params())
+                    step[configc] = opt[configc].apply_gradients(grads)#.minimize(-softobj[configc], var_list=cores[configc].params())
                 #build summaries
                 copy_summary[copy] += [tf.summary.scalar('objective', tf.reduce_mean(objective)),
                                 tf.summary.scalar('ELBO', tf.reduce_mean(elbo)),
@@ -257,7 +269,8 @@ with tf.name_scope("model"):
 
         mode_opt.minimize(sess)
         print('Initializing...')
-        for init in init_opt.values():
+        for init, init_op in zip(init_opt.values(), init_ops.values()):
+            sess.run(init_op)
             init.minimize(sess)
         
         print('Starting gradient ascent...')
