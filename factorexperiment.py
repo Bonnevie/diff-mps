@@ -16,13 +16,13 @@ from itertools import product
 timeit = False #log compute time of every op for Tensorboard visualization (costly)
 calculate_true = True #calculate true tensor and MPS (WARNING: can cause OOM for N>>14)
 do_anneal = False #do entropy annealing
-name = 'relax' 
+name = 'varreduc' 
 datatype = 'random' #'random', 'blocked', or 'karate'
-version = 2
+version = 1
 N = 7 #number of vertices in graph
-Ntest = 0 #number of edges to use for testing
+Ntest = 5 #number of edges to use for testing
 K = 3 #number of communities to look for
-nsamples=1000 #number of gradient samples per iteration
+nsamples=100 #number of gradient samples per iteration
 steps = 10000 #number of optimization iterations
 decay_steps = 600 #number of steps between learning rate decay
 anneal_decay_steps = 100 #number of steps beteween anneal decay
@@ -36,9 +36,9 @@ folder = name + 'D{}V{}N{}K{}S{}'.format(datatype,version, N, K, nsamples)
 
 #factors variations to run experiments over
 copies = 1
-coretypes = [''] #types of cores to try 
+coretypes = ['','canon'] #types of cores to try 
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
-inittypes = ['random'] #whether to run an initialization routine
+inittypes = ['random','expectation'] #whether to run an initialization routine
 #Options are: 'random' for random values, 'entropy' for maximum marginal entropy, 'rank1' for minimum norm to tensor mixture of 10 modes the model,
 #'expectation' for maximum expectation of the the previous tensor mixture under q.
 maxranks = [9]
@@ -150,7 +150,7 @@ with tf.name_scope("model"):
     Xt = tf.constant(X)
     print("building models...")
     for config in tqdm.tqdm(all_config, total=config_count):
-        coretype, init, opt_name, objective, do_project, decay_rate, anneal_decay_rate, R = config
+        coretype, init, opt_name, objective_name, do_project, decay_rate, anneal_decay_rate, R = config
         if short_key:
             config_name = ''.join([''.join([key, str(value)]) for key, value, active in zip(factor_code, config, active_factors) if active])
         else:
@@ -181,15 +181,16 @@ with tf.name_scope("model"):
                     anneal_invtemp = 1.
                 q[configc] = tn.MPS(N, K, ranks, cores=cores[configc])
                 cvweight = 1.
-                if objective is '':
+                if objective_name is '':
                     objective, elbo, loss, entropy, marginalentropy, marginalcv = (q[configc].elbo(lambda sample: p.batch_logp(sample, Xt, observed=mask), nsamples=nsamples, fold=False, report=True, cvweight=cvweight, invtemp=anneal_invtemp))
-                elif objective is 'modes':
+                elif objective_name is 'modes':
                     objective, elbo, loss, entropy, marginalentropy, marginalcv = (q[configc].elbowithmodes(lambda sample: p.batch_logp(sample, Xt, observed=mask), anchors, nsamples=nsamples, fold=False, report=True, cvweight=cvweight, invtemp=anneal_invtemp))
-                elif objective is 'relax':
-                    relax_params = q[configc].buildcontrol(lambda sample: tf.reduce_mean(p.batch_logp(sample, Xt, observed=mask) - tf.log(1e-16+q[configc].batch_contraction(sample))), nsamples=nsamples, fold=False)
+                elif objective_name is 'relax':
+                    relax_params = q[configc].buildcontrol(lambda sample: -tf.reduce_mean(p.batch_logp(sample, Xt, observed=mask) - tf.log(1e-16+q[configc].batch_contraction(sample))), nsamples=nsamples, fold=False)
                     objective, elbo, loss, entropy, marginalentropy, marginalcv = (q[configc].elbo(lambda sample: p.batch_logp(sample, Xt, observed=mask), nsamples=nsamples, differentiable=False, fold=False, report=True, cvweight=cvweight, invtemp=anneal_invtemp))
                     grads, vargrads = RELAX(*relax_params, cores[configc].params(), var_params=q[configc].var_params()) 
-                elif objective is 'relax_neural':
+                    grads = grads + vargrads
+                elif objective_name is 'relax_neural':
                     pass
 
                 #objective, elbo, loss, entropy, marginalentropy, marginalcv = (q[configc].elbowithmodes(lambda sample: p.batch_logp(sample, Xt, observed=mask), anchors, nsamples=nsamples, fold=False, report=True, cvweight=cvweight, invtemp=anneal_invtemp))
@@ -211,7 +212,7 @@ with tf.name_scope("model"):
                 elif init is 'expectation':
                     mode_loss = -tf.reduce_sum(tf.log(q[configc].batch_contraction(tf.nn.softmax(Z))))
 
-                init_ops[configc] = q[configc].set_temperature(temperature)
+                init_ops[configc] = tf.group(q[configc].set_temperature(temperature), q[configc].set_nu(1.))
                 init_opt[configc] = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=cores[configc].params(),method='CG')
                 
                 if do_project:
@@ -220,7 +221,7 @@ with tf.name_scope("model"):
                     
                 #build optimizers
                 decayed_rate = tf.train.exponential_decay(tf.cast(rate, dtype), global_step, decay_steps, decay_rate, staircase=True)
-                if objective is not 'relax' and objective is not 'relax_neural':
+                if objective_name is not 'relax' and objective is not 'relax_neural':
                     grads = zip(tf.gradients(-softobj[configc], cores[configc].params()), cores[configc].params())
                 
                 if opt_name is 'Adam':
@@ -238,7 +239,9 @@ with tf.name_scope("model"):
                                 tf.summary.scalar('pred', tf.reduce_mean(pred)),
                                 tf.summary.scalar('logp', tf.reduce_mean(loss)),
                                 tf.summary.scalar('entropy', tf.reduce_mean(entropy)),
-                                tf.summary.scalar('marginalentropy', tf.reduce_mean(marginalentropy))]
+                                tf.summary.scalar('marginalentropy', tf.reduce_mean(marginalentropy)),
+                                tf.summary.scalar('temperature',tf.reduce_mean(q[configc].temperatures)),
+                                tf.summary.scalar('nu',q[configc].nu)]
     if timeit:
         run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
         run_metadata = tf.RunMetadata()

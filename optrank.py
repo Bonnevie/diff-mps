@@ -17,7 +17,7 @@ from itertools import product
 timeit = False #log compute time of every op for Tensorboard visualization (costly)
 calculate_true = False #calculate true tensor and MPS (WARNING: can cause OOM for N>>14)
 do_anneal = False #do entropy annealing
-name = 'lowrank' 
+name = 'normed' 
 version = 3
 N = 7 #number of vertices in graph
 Ntest = 5 #number of edges to use for testing
@@ -135,11 +135,11 @@ with tf.name_scope("model"):
                 logZ[copy] = np.logaddexp.reduce(logptensor[copy].ravel())
                 ptensor[copy] = np.exp(logptensor[copy] - logZ[copy])
                 for rank in tqdm.tqdm(maxranks, total=len(maxranks)):
-                    pcore, pmps = tn.full2TT(np.sqrt(ptensor[copy]), rank)
+                    pcore, pmps = tn.full2TT(np.sqrt(ptensor[copy]), rank, normalized=True)
                     pred_p = sess.run(tf.reduce_sum(pmps.batch_contraction(all_anchors)*(p.batch_logp(all_anchors,X[copy],observed=predictionmask))))
                     elbo_p = sess.run(tf.reduce_sum(pmps.batch_contraction(all_anchors)*(p.batch_logp(all_anchors,X[copy],observed=mask)-tf.log(1e-16+pmps.batch_contraction(all_anchors)))))
                     ptensor_p = sess.run(pmps.populatetensor())
-                    kl_p = np.sum(ptensor_p*(np.log(ptensor[copy])-np.log(ptensor_p)))
+                    kl_p = np.sum(ptensor_p*(np.log(ptensor_p)-np.log(ptensor[copy])))
                     df_p['ELBO'][(rank, copy)] = elbo_p
                     df_p['pred_llk'][(rank, copy)] = pred_p
                     df_p['KL'][(rank, copy)] = kl_p
@@ -156,11 +156,12 @@ with tf.name_scope("model"):
                 configc = config + (copy,)
                 opt[config].minimize(sess, feed_dict = {Xt[config]: X[copy]})
                 elbo_c, pred_c, qtensor_c = sess.run([trueelbo[config], pred[config], qtensor[config]], feed_dict = {Xt[config]: X[copy]})
-                kl_c = np.sum(qtensor_c*(np.log(ptensor[copy])-np.log(qtensor_c)))
+                kl_c = np.sum(qtensor_c*(np.log(qtensor_c)-np.log(ptensor[copy])))
                 df_c['ELBO'][configc] = elbo_c
                 df_c['pred_llk'][configc] = pred_c
                 df_c['KL'][configc] = kl_c
 
-supdict = {'df_c':df_c, 'df_p':df_p, 'logZ': logZ, }
+save_name = folder + config_full_name + '_optrank.pkl'
+supdict = {'name': save_name, 'df_c':df_c, 'df_p':df_p, 'logZ': logZ, 'X':X}
 with open(folder + config_full_name + '_optrank.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)

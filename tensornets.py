@@ -33,7 +33,7 @@ def mosaic(Z, split=None):
         A[bitify(coord1, K), bitify(coord2, K)] = np.log(np.maximum(Z[ind], 0.))
     return A
 
-def full2TT(A, maxrank=np.inf):
+def full2TT(A, maxrank=np.inf, normalized=False):
     Z = A
     k = A.shape[0]
     ndim = A.ndim
@@ -53,7 +53,7 @@ def full2TT(A, maxrank=np.inf):
         rprev = r
     G[-1] *= Z
     cores = Core(ndim, k, ranks, cores=[tf.transpose(g,[1,0,2]) for g in G])
-    return cores, MPS(ndim, k, ranks, cores=cores, normalized=False)
+    return cores, MPS(ndim, k, ranks, cores=cores, normalized=normalized)
 
 def randomorthogonal(shape):
     '''Returns a random orthogonal matrix of shape Shape'''
@@ -277,8 +277,8 @@ class MPS:
                                                 tf.convert_to_tensor(1., dtype=dtype))
 
 
-        self._nuvar = tf.Variable(np.log(np.exp(1.)-1.), dtype=dtype)
-        self.nu = tf.nn.softplus(self._nuvar)
+        self._nuvar = tf.Variable(1., dtype=dtype)
+        self.nu = tf.identity(self._nuvar)
         if multi_temp:
             self._tempvar = tf.Variable(np.log(np.exp(0.5)-1.)*np.ones(N), dtype=dtype)
             self.temperatures = tf.nn.softplus(self._tempvar)
@@ -308,6 +308,9 @@ class MPS:
 
     def set_temperature(self, value):
         return tf.assign(self._tempvar, np.log(np.exp(value)-1.))
+
+    def set_nu(self, value):
+        return tf.assign(self._nuvar, value)
 
     @tfmethod(1)
     def contraction(self, Z, normalized=True):
@@ -845,6 +848,8 @@ class Canonical(Core):
         self.ranks = ranks
         self.right_canonical = not left
         self.left_canonical = left
+        self.initials = initial
+        self.orthogonalstyle=orthogonalstyle
 
 
 
