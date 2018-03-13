@@ -848,7 +848,6 @@ class Canonical(Core):
         self.ranks = ranks
         self.right_canonical = not left
         self.left_canonical = left
-        self.initials = initial
         self.orthogonalstyle=orthogonalstyle
 
 
@@ -956,7 +955,7 @@ class PermutationCore(Core):
         return self.core0
 
 class PermutationCore_augmented(Core):
-    def __init__(self, N, K, repranks, ranks, projection=True):
+    def __init__(self, N, K, repranks, ranks):
         self.N = N
         self.K = K
         self.repranks = repranks
@@ -967,28 +966,14 @@ class PermutationCore_augmented(Core):
         self.rep = [np.eye(self.K, dtype=dtype)[np.roll(np.arange(self.K),k)] for k in range(self.K)]
         self.V = np.column_stack([np.eye(self.K, dtype=dtype)[0], np.ones(self.K, dtype=dtype)/np.sqrt(self.K)])
 
-        if projection:
-            self.core0 = [tf.Variable(tf.random_normal(repranks, dtype=dtype)) for repranks in zip(self.repranks[:-1], self.repranks[1:])]
-            self.proj = self.V.dot(np.linalg.solve(self.V.T.dot(self.V), self.V.T))
-            self.repproj = [rep.dot(self.proj) for rep in self.rep]
-            self.cores = [tf.stack([tf.matmul(tf.matmul(self.repk(repproj_i,
-                                                                  rank0//self.K),
+        self.core0 = [tf.Variable(tf.random_normal((2*(rank0//self.K) if rank0>1 else 1, 2*(rank1//self.K) if rank1>1 else 1), dtype=dtype)) for rank0, rank1 in zip(self.repranks[:-1], self.repranks[1:])]
+        self.augment = [tf.Variable(tf.random_normal((rank0, rank1), dtype=dtype)) for rank0, rank1 in zip(self.ranks[:-1], self.ranks[1:])]
+        self.repcores = [tf.stack([tf.matmul(tf.matmul(self.repk(rep_i.dot(self.V), rank0//self.K),
                                                         core0_i),
-                                              self.repk(repproj_i, rank1//self.K),
-                                              transpose_b=True)
-                                    for repproj_i in self.repproj])
-                          for core0_i, rank0, rank1 in zip(self.core0,
-                                                           self.repranks[:-1],
-                                                           self.repranks[1:])]
-        else:
-            self.core0 = [tf.Variable(tf.random_normal((2*(rank0//self.K) if rank0>1 else 1, 2*(rank1//self.K) if rank1>1 else 1), dtype=dtype)) for rank0, rank1 in zip(self.repranks[:-1], self.repranks[1:])]
-            self.augment = [tf.Variable(tf.random_normal(rank0, rank1)) for rank0, rank1 in zip(self.ranks[:-1], self.ranks[1:])]
-            self.repcores = [tf.stack([tf.matmul(tf.matmul(self.repk(rep_i.dot(self.V), rank0//self.K),
-                                                            core0_i),
-                                                  self.repk(rep_i.dot(self.V), rank1//self.K),
-                                                  transpose_b=True) for rep_i in self.rep])
-                                                  for core0_i, rank0, rank1 in zip(self.core0, self.repranks[:-1], self.repranks[1:])]
-            self.cores = [augment[None, :, :] + tf.pad(repcore, np.column_stack([np.zeros(3), augment.shape-repcore.shape]), 'CONSTANT') for augment, repcore in zip(self.augment, self.repcores)]
+                                                self.repk(rep_i.dot(self.V), rank1//self.K),
+                                                transpose_b=True) for rep_i in self.rep])
+                                                for core0_i, rank0, rank1 in zip(self.core0, self.repranks[:-1], self.repranks[1:])]
+        self.cores = [augment[None, :, :] + tf.pad(repcore, np.column_stack([np.zeros(3), np.array([self.K]+augment.shape.as_list())-np.array(repcore.shape.as_list())]), 'CONSTANT') for augment, repcore in zip(self.augment, self.repcores)]
 
     def repk(self, rep, k):
         if not k:
