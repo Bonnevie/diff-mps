@@ -17,26 +17,26 @@ from itertools import product
 timeit = False #log compute time of every op for Tensorboard visualization (costly)
 calculate_true = False #calculate true tensor and MPS (WARNING: can cause OOM for N>>14)
 do_anneal = False #do entropy annealing
-name = 'normed' 
-version = 3
+name = 'minimal' 
+version = 1
 N = 7 #number of vertices in graph
 Ntest = 5 #number of edges to use for testing
 K = 3 #number of communities to look for
 nsamples=100 #number of gradient samples per iteration
-
 folder = name + 'V{}N{}K{}S{}'.format(version, N, K, nsamples)
 
 #factors variations to run experiments over
-copies = 50
-coretypes = [''] #types of cores to try 
+copies = 1
+random_restarts = 1
+coretypes = ['','canon'] #types of cores to try 
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
-maxranks = [3,6,9,12,15,18,21,24,27]
+maxranks = [9]
 #Options are: 'SGD', 'Adadelta', 'Adam'
 objective = ['']
 
-factor_code = ['T','R']
-factor_names = ['coretype','rank']
-factors = [coretypes, maxranks]
+factor_code = ['T','R','S']
+factor_names = ['coretype','rank','restarts']
+factors = [coretypes, maxranks, range(random_restarts)]
 short_key = False
 active_factors = [len(factor)>1 for factor in factors]
 all_config = list(product(*factors))
@@ -88,7 +88,7 @@ with tf.name_scope("model"):
     
     print("building models...")
     for config in tqdm.tqdm(all_config, total=config_count):
-        coretype, R = config
+        coretype, R, restart_ind = config
         if short_key:
             config_name = ''.join([''.join([key, str(value)]) for key, value, active in zip(factor_code, config, active_factors) if active])
         else:
@@ -114,10 +114,10 @@ with tf.name_scope("model"):
             #build q model
             q[config] = tn.MPS(N, K, ranks, cores=cores[config])
             pred[config] = tf.reduce_sum(q[config].batch_contraction(all_anchors)*(p.batch_logp(all_anchors,Xt[config],observed=predictionmask)))
-            trueelbo[config] = tf.reduce_sum(q[config].batch_contraction(all_anchors)*(p.batch_logp(all_anchors,Xt[config],observed=mask)-tf.log(1e-16+q[config].batch_contraction(all_anchors))))
+            trueelbo[config] = tf.reduce_sum(q[config].batch_contraction(all_anchors)*(p.batch_logp(all_anchors,Xt[config],observed=mask)-tf.log(q[config].batch_contraction(all_anchors))))
             qtensor[config] = q[config].populatetensor()
             #build optimizers
-            opt[config] = tf.contrib.opt.ScipyOptimizerInterface(-trueelbo[config], var_list=cores[config].params(), options={'gtol':1e-6})
+            opt[config] = tf.contrib.opt.ScipyOptimizerInterface(-trueelbo[config], var_list=cores[config].params())
 
     column_names = ['ELBO','pred_llk','KL']
     index_p = pd.MultiIndex.from_product([maxranks, range(copies)], names=['rank', 'copy'])
@@ -137,7 +137,7 @@ with tf.name_scope("model"):
                 for rank in tqdm.tqdm(maxranks, total=len(maxranks)):
                     pcore, pmps = tn.full2TT(np.sqrt(ptensor[copy]), rank, normalized=True)
                     pred_p = sess.run(tf.reduce_sum(pmps.batch_contraction(all_anchors)*(p.batch_logp(all_anchors,X[copy],observed=predictionmask))))
-                    elbo_p = sess.run(tf.reduce_sum(pmps.batch_contraction(all_anchors)*(p.batch_logp(all_anchors,X[copy],observed=mask)-tf.log(1e-16+pmps.batch_contraction(all_anchors)))))
+                    elbo_p = sess.run(tf.reduce_sum(pmps.batch_contraction(all_anchors)*(p.batch_logp(all_anchors,X[copy],observed=mask)-tf.log(pmps.batch_contraction(all_anchors)))))
                     ptensor_p = sess.run(pmps.populatetensor())
                     kl_p = np.sum(ptensor_p*(np.log(ptensor_p)-np.log(ptensor[copy])))
                     df_p['ELBO'][(rank, copy)] = elbo_p
@@ -154,6 +154,8 @@ with tf.name_scope("model"):
             sess.run(init)
             for config in tqdm.tqdm(all_config, total=config_count):
                 configc = config + (copy,)
+                kl_c = np.inf
+                sess.run(init)
                 opt[config].minimize(sess, feed_dict = {Xt[config]: X[copy]})
                 elbo_c, pred_c, qtensor_c = sess.run([trueelbo[config], pred[config], qtensor[config]], feed_dict = {Xt[config]: X[copy]})
                 kl_c = np.sum(qtensor_c*(np.log(qtensor_c)-np.log(ptensor[copy])))
@@ -163,5 +165,5 @@ with tf.name_scope("model"):
 
 save_name = folder + config_full_name + '_optrank.pkl'
 supdict = {'name': save_name, 'df_c':df_c, 'df_p':df_p, 'logZ': logZ, 'X':X}
-with open(folder + config_full_name + '_optrank.pkl','wb') as handle:
-    pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+#with open(folder + config_full_name + '_optrank.pkl','wb') as handle:
+#    pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
