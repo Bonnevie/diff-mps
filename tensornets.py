@@ -85,7 +85,7 @@ class OrthogonalMatrix:
         if eye:
             initial = np.eye(N, dtype=dtype)
         else:
-            initial = np.random.randn(N, N).astype(dtype)
+            initial = tf.random_normal((N, N),dtype=dtype)
         self._var = tf.Variable(initial)
         self.V = self._var/tf.sqrt(tf.reduce_sum(tf.square(self._var),
                                                  axis=1, keep_dims=True))
@@ -820,6 +820,8 @@ class Core:
 
     def params(self):
         return self.cores
+    def randomize_op(self):
+        return tf.group(tuple([tf.assign(var, tf.random_normal(var.shape, dtype=dtype)) for var in self.params()]))
 
 class Canonical(Core):
     '''
@@ -907,7 +909,7 @@ class Canonical(Core):
     def copycore_op(self, core):
         ops = [u1._var.assign(u2._var) for u1, u2 in zip(self.U, core.U)]
         return tf.group(*ops)
-
+    
 def rootofunity(K):
     angle = 2.*np.pi/K
     return np.array([[np.cos(angle), np.sin(angle)],[-np.sin(angle),np.cos(angle)]])
@@ -970,7 +972,7 @@ class PermutationCore_augmented(Core):
         self.augment = [tf.Variable(tf.random_normal((rank0, rank1), dtype=dtype)) for rank0, rank1 in zip(self.ranks[:-1], self.ranks[1:])]
         self.repcores = [tf.stack([tf.matmul(tf.matmul(self.repk(rep_i.dot(self.V), rank0//self.K),
                                                         core0_i),
-                                                self.repk(rep_i.dot(self.V), rank1//self.K),
+                                                   self.repk(rep_i.dot(self.V), rank1//self.K),
                                                 transpose_b=True) for rep_i in self.rep])
                                                 for core0_i, rank0, rank1 in zip(self.core0, self.repranks[:-1], self.repranks[1:])]
         self.cores = [augment[None, :, :] + tf.pad(repcore, np.column_stack([np.zeros(3), np.array([self.K]+augment.shape.as_list())-np.array(repcore.shape.as_list())]), 'CONSTANT') for augment, repcore in zip(self.augment, self.repcores)]
