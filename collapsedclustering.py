@@ -133,7 +133,7 @@ class CollapsedStochasticBlock(CollapsedMixture):
         if observed is None:
             observed = tf.convert_to_tensor(np.triu(np.ones((self.N, self.N), dtype=dtype), 1))
 
-        membership = tf.reduce_sum(Z, axis=0, keep_dims=True)
+        membership = tf.reduce_sum(Z, axis=0, keepdims=True)
         edgecounts = tf.einsum('mk,mn,nl', Z, observed*X, Z) #Z^T*X*Z
         notedgecounts = tf.einsum('mk,mn,nl', Z, observed, Z) - edgecounts
 
@@ -170,7 +170,7 @@ class CollapsedStochasticBlock(CollapsedMixture):
             observed = self._defaultobserved
         else:
             observed = tf.convert_to_tensor(observed, dtype)
-        membership = tf.reduce_sum(Z, axis=1, keep_dims=True)
+        membership = tf.reduce_sum(Z, axis=1, keepdims=True)
         edgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed*X, Z) #Z^T*X*Z
         notedgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed, Z) - edgecounts
 
@@ -192,7 +192,7 @@ class CollapsedStochasticBlock(CollapsedMixture):
             observed = tf.ones((self.N, self.N), dtype=dtype)
         else:
             observed = tf.convert_to_tensor(observed, dtype)
-        membership = tf.reduce_sum(Z, axis=1, keep_dims=True)
+        membership = tf.reduce_sum(Z, axis=1, keepdims=True)
         edgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed*X, Z) #Z^T*X*Z
         notedgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed, Z) - edgecounts
 
@@ -215,7 +215,7 @@ class CollapsedBipartiteStochasticBlock(CollapsedMultipartite):
 
     @tfmethod(2)
     def suffstats(self, Zs, X):
-        memberships = [tf.reduce_sum(Z, axis=0, keep_dims=True) for Z in Zs]
+        memberships = [tf.reduce_sum(Z, axis=0, keepdims=True) for Z in Zs]
         edgecounts = tf.matmul(tf.matmul(Zs[0], X, transpose_a=True), Zs[1])
         notedgecounts = tf.matmul(memberships[0], memberships[1], transpose_a=True) - edgecounts
         return memberships, edgecounts, notedgecounts

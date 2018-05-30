@@ -14,29 +14,23 @@ import tensornets as tn
 from itertools import product
 
 #FLAGS
-timeit = False #log compute time of every op for Tensorboard visualization (costly)
-calculate_true = False #calculate true tensor and MPS (WARNING: can cause OOM for N>>14)
-do_anneal = False #do entropy annealing
-name = 'minimal' 
+name = 'full' 
 version = 1
-N = 7 #number of vertices in graph
-Ntest = 5 #number of edges to use for testing
-K = 3 #number of communities to look for
-nsamples=100 #number of gradient samples per iteration
-folder = name + 'V{}N{}K{}S{}'.format(version, N, K, nsamples)
+Ntest = 0 #number of edges to use for testing
+K = 2 #number of communities to look for
+folder = name + 'V{}K{}'.format(version, K)
 
 #factors variations to run experiments over
-copies = 1
-random_restarts = 1
-coretypes = ['','canon'] #types of cores to try 
+copies = 10
+random_restarts = 10
+coretypes = ['canon']#,'perm'] #types of cores to try 
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
-maxranks = [9]
-#Options are: 'SGD', 'Adadelta', 'Adam'
-objective = ['']
+maxranks = [2,4,8,12,16]#,12,15,18]
+Ns = [4,6,8]#,6,7] #number of vertices in graph
 
-factor_code = ['T','R','S']
-factor_names = ['coretype','rank','restarts']
-factors = [coretypes, maxranks, range(random_restarts)]
+factor_code = ['N','T','R','S']
+factor_names = ['size','coretype','rank','restarts']
+factors = [Ns, coretypes, maxranks, range(random_restarts)]
 short_key = False
 active_factors = [len(factor)>1 for factor in factors]
 all_config = list(product(*factors))
@@ -47,48 +41,47 @@ copy_writer = []
 np.random.seed(1)
 tf.reset_default_graph()
 
-#generate mask of observed edges
-if Ntest > 0:
-    mask = np.random.randn(N,N) + np.triu(np.inf*np.ones(N))
-    mask = mask < np.sort(mask.ravel())[Ntest]
-    mask = np.logical_not(np.logical_or(mask,mask.T))
-else:
-    mask = np.ones((N, N), dtype=bool)
-mask = np.triu(mask, 1)
-predictionmask = np.triu(~mask, 1)
-mask = tf.convert_to_tensor(mask.astype(dtype))
-predictionmask = tf.convert_to_tensor(predictionmask.astype(dtype))
+
 
 sym = lambda X: np.triu(X, 1) + np.triu(X, 1).T
-X = np.stack([sym(np.random.randn(N, N)>0.5).astype(dtype) for _ in range(copies)])
+X = {}
+mask = {}
+predictionmask = {}
+p = {}
+for N in Ns:
+    p[N] = CollapsedStochasticBlock(N, K, alpha=1, a=1, b=1)
+    X[N] = np.stack([sym(np.random.randn(N, N)>0.5).astype(dtype) for _ in range(copies)])
+    #generate mask of observed edges
+    if Ntest > 0:
+        mask[N] = np.random.randn(N,N) + np.triu(np.inf*np.ones(N))
+        mask[N] = mask[N] < np.sort(mask[N].ravel())[Ntest]
+        mask[N] = np.logical_not(np.logical_or(mask[N],mask[N].T))
+        mask[N] = np.triu(mask[N], 1)
+        predictionmask[N] = np.triu(~mask[N], 1)
+        mask[N] = tf.convert_to_tensor(mask[N].astype(dtype))
+        predictionmask[N] = tf.convert_to_tensor(predictionmask[N].astype(dtype))
+    else:
+        mask[N] = np.ones((N, N), dtype=bool)
+        mask[N] = np.triu(mask[N], 1)
+        mask[N] = tf.convert_to_tensor(mask[N].astype(dtype))
 
-
-cores = {}
-q = {}
-softelbo = {}
-true_elbo = {}
-softpred = {}
-softobj = {}
 trueelbo = {}
 pred = {}
-opt = {}
-step = {}
-equalize_ops = []
-qtensor = {}
+q = {}
 Xt = {}
+qtensor = {}
+opt = {}
+cores = {}
 
-copy_summary = [[] for copy in range(copies)]
-all_anchors = tf.stack([np.eye(K)[list(index)] for index in np.ndindex((K,)*N)])
+all_anchors = {}
+for N in Ns:
+    all_anchors[N] = tf.stack([np.eye(K)[list(index)] for index in np.ndindex((K,)*N)])
 
-global_step = tf.Variable(1, name='global_step', trainable=False, dtype=tf.int32)
-increment_global_step_op = tf.assign(global_step, global_step+1)
 with tf.name_scope("model"):
-    p = CollapsedStochasticBlock(N, K, alpha=1, a=1, b=1)
-    #p = CollapsedStochasticBlock(N, K, alpha=100, a=10, b=10)
     
     print("building models...")
     for config in tqdm.tqdm(all_config, total=config_count):
-        coretype, R, restart_ind = config
+        N, coretype, R, restart_ind = config
         if short_key:
             config_name = ''.join([''.join([key, str(value)]) for key, value, active in zip(factor_code, config, active_factors) if active])
         else:
@@ -113,57 +106,70 @@ with tf.name_scope("model"):
             
             #build q model
             q[config] = tn.MPS(N, K, ranks, cores=cores[config])
-            pred[config] = tf.reduce_sum(q[config].batch_contraction(all_anchors)*(p.batch_logp(all_anchors,Xt[config],observed=predictionmask)))
-            trueelbo[config] = tf.reduce_sum(q[config].batch_contraction(all_anchors)*(p.batch_logp(all_anchors,Xt[config],observed=mask)-tf.log(q[config].batch_contraction(all_anchors))))
+            if Ntest>0:
+                pred[config] = tf.reduce_sum(q[config].batch_contraction(all_anchors[N])*(p[N].batch_logp(all_anchors[N],Xt[config],observed=predictionmask[N])))
+            trueelbo[config] = tf.reduce_sum(q[config].batch_contraction(all_anchors[N])*(p[N].batch_logp(all_anchors[N],Xt[config],observed=mask[N])-tf.log(q[config].batch_contraction(all_anchors[N]))))
             qtensor[config] = q[config].populatetensor()
             #build optimizers
             opt[config] = tf.contrib.opt.ScipyOptimizerInterface(-trueelbo[config], var_list=cores[config].params())
 
-    column_names = ['ELBO','pred_llk','KL']
-    index_p = pd.MultiIndex.from_product([maxranks, range(copies)], names=['rank', 'copy'])
-    df_p = pd.DataFrame(np.zeros((len(maxranks)*copies,3)), index=index_p, columns=column_names)
-    logptensor = {}
-    logZ = {}
-    ptensor = {}
+    column_names = ['ELBO','KL']
+    if Ntest>0:
+        column_names += ['pred_llk']
+    index_p = pd.MultiIndex.from_product([maxranks, Ns, range(copies)], names=['rank', 'size', 'copy'])
+    df_p = pd.DataFrame(np.zeros((len(maxranks)*len(Ns)*copies,len(column_names))), index=index_p, columns=column_names)
+    logptensor = {N:{} for N in Ns}
+    logZ = {N:{} for N in Ns}
+    ptensor = {N:{} for N in Ns}
 
-
+    #baseline evaluation
     sess = tf.Session()
+    print("Calculating baselines.")
     with tf.name_scope("truemodel"):
-        for copy in tqdm.tqdm(range(copies), total=copies):
+        for N, copy in product(Ns, range(copies)):
             with sess.as_default():
-                logptensor[copy] = p.populatetensor(X[copy], observed=mask)
-                logZ[copy] = np.logaddexp.reduce(logptensor[copy].ravel())
-                ptensor[copy] = np.exp(logptensor[copy] - logZ[copy])
+                logptensor[N][copy] = p[N].populatetensor(X[N][copy], observed=mask[N])
+                logZ[N][copy] = np.logaddexp.reduce(logptensor[N][copy].ravel())
+                ptensor[N][copy] = np.exp(logptensor[N][copy] - logZ[N][copy])
+                
                 for rank in tqdm.tqdm(maxranks, total=len(maxranks)):
-                    pcore, pmps = tn.full2TT(np.sqrt(ptensor[copy]), rank, normalized=True)
-                    pred_p = sess.run(tf.reduce_sum(pmps.batch_contraction(all_anchors)*(p.batch_logp(all_anchors,X[copy],observed=predictionmask))))
-                    elbo_p = sess.run(tf.reduce_sum(pmps.batch_contraction(all_anchors)*(p.batch_logp(all_anchors,X[copy],observed=mask)-tf.log(pmps.batch_contraction(all_anchors)))))
+                    pcore, pmps = tn.full2TT(np.sqrt(ptensor[N][copy]), rank, normalized=True)
+                    if Ntest>0:
+                        pred_p = sess.run(tf.reduce_sum(pmps.batch_contraction(all_anchors[N])*(p[N].batch_logp(all_anchors[N],X[N][copy],observed=predictionmask[N]))))
+                    elbo_p = sess.run(tf.reduce_sum(pmps.batch_contraction(all_anchors[N])*(p[N].batch_logp(all_anchors[N],X[N][copy],observed=mask[N])-tf.log(pmps.batch_contraction(all_anchors[N])))))
                     ptensor_p = sess.run(pmps.populatetensor())
-                    kl_p = np.sum(ptensor_p*(np.log(ptensor_p)-np.log(ptensor[copy])))
-                    df_p['ELBO'][(rank, copy)] = elbo_p
-                    df_p['pred_llk'][(rank, copy)] = pred_p
-                    df_p['KL'][(rank, copy)] = kl_p
+                    kl_p = np.sum(ptensor_p*(np.log(ptensor_p)-np.log(ptensor[N][copy])))
+                    df_p['ELBO'][(rank, N, copy)] = elbo_p
+                    if Ntest>0:
+                        df_p['pred_llk'][(rank, N, copy)] = pred_p
+                    df_p['KL'][(rank, N, copy)] = kl_p
     init = tf.global_variables_initializer()
     
+    #run all configurations
     index_c = pd.MultiIndex.from_product(factors + [range(copies)], names=factor_names + ['copy'])
-    df_c = pd.DataFrame(np.zeros((config_count*copies,3)), index=index_c, columns=column_names)
-
+    df_c = pd.DataFrame(np.zeros((config_count*copies,3)), index=index_c, columns=column_names + ['time'])
     with tf.name_scope("optimization"):    
         print("Starting optimization.")
         for copy in tqdm.tqdm(range(copies), total=copies):
             sess.run(init)
             for config in tqdm.tqdm(all_config, total=config_count):
+                N = config[0]
                 configc = config + (copy,)
                 kl_c = np.inf
                 sess.run(init)
-                opt[config].minimize(sess, feed_dict = {Xt[config]: X[copy]})
-                elbo_c, pred_c, qtensor_c = sess.run([trueelbo[config], pred[config], qtensor[config]], feed_dict = {Xt[config]: X[copy]})
-                kl_c = np.sum(qtensor_c*(np.log(qtensor_c)-np.log(ptensor[copy])))
+                t0 = time.time()
+                opt[config].minimize(sess, feed_dict = {Xt[config]: X[N][copy]})
+                df_c['time'][configc] = time.time() - t0
+                if Ntest>0:
+                    elbo_c, pred_c, qtensor_c = sess.run([trueelbo[config], pred[config], qtensor[config]], feed_dict = {Xt[config]: X[N][copy]})
+                    df_c['pred_llk'][configc] = pred_c
+                else:
+                    elbo_c, qtensor_c = sess.run([trueelbo[config], qtensor[config]], feed_dict = {Xt[config]: X[N][copy]})
                 df_c['ELBO'][configc] = elbo_c
-                df_c['pred_llk'][configc] = pred_c
+                kl_c = np.sum(qtensor_c*(np.log(qtensor_c)-np.log(ptensor[N][copy])))
                 df_c['KL'][configc] = kl_c
 
 save_name = folder + config_full_name + '_optrank.pkl'
 supdict = {'name': save_name, 'df_c':df_c, 'df_p':df_p, 'logZ': logZ, 'X':X}
-#with open(folder + config_full_name + '_optrank.pkl','wb') as handle:
-#    pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+with open(folder + config_full_name + '_optrank.pkl','wb') as handle:
+    pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)

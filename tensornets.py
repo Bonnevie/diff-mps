@@ -88,7 +88,7 @@ class OrthogonalMatrix:
             initial = tf.random_normal((N, N),dtype=dtype)
         self._var = tf.Variable(initial)
         self.V = self._var/tf.sqrt(tf.reduce_sum(tf.square(self._var),
-                                                 axis=1, keep_dims=True))
+                                                 axis=1, keepdims=True))
         self.neg_matrix = HouseholderChain(self.V)
 
     def dot(self, A, left_product=True):
@@ -338,30 +338,11 @@ class MPS:
 
         for core, z in zip(cores, tf.unstack(Z, axis=1)):
             S = batch_inner_contraction(S, core, z)
-        return tf.squeeze(S)
+        return tf.reshape(S, (-1,))
 
-    @tfmethod(0)
-    def buildcontrol(self, f, fhat =None, nsamples=1, fold=False):
-        '''Runs ancestral sampling routine on MPS and auxiliary shadow model
-        and calculates necessary reparameterized quantities for a
-        RELAX estimator.
-        '''
-        if fhat is None:
-            fhat = f
-        b, shadowb, conditionalshadowb = self.sample(nsamples, doshadowsample=True)
-        if fold:
-            loss = tf.map_fn(f, b)
-            control = tf.map_fn(fhat, shadowb)
-            conditional_control = tf.map_fn(fhat, condtionalshadowb)
-            logp = tf.log(tf.map_fn(self.contraction, b))
-        else:
-            loss = f(b)
-            control = fhat(shadowb)
-            conditional_control = fhat(shadowb)
-            logp = tf.log(self.batch_contraction(b))
-        return (tf.reduce_mean(loss), self.nu*tf.reduce_mean(control), self.nu*tf.reduce_mean(conditional_control), tf.reduce_mean(logp))
-
-
+    @tfmethod(1)
+    def batch_logp(self, Z):
+        return tf.log(1e-16+self.batch_contraction(Z, normalized=True))
 
     @tfmethod(0)
     def softsample(self, nsamples=1):
@@ -373,7 +354,6 @@ class MPS:
         containing the marginalization information), softsample conditions on
         Lhat=sum L_i*x1[i] so that the conditioning is correct if x1 is
         concentrated on one value.
-
         Returns:
             Z: NxK tensor. A sample from the shadow MPS.
         """
@@ -411,9 +391,150 @@ class MPS:
             shadowsamples = shadowsamples[-1::-1]
         shadowb = tf.transpose(tf.stack(shadowsamples), [1,0,2])
         return tf.squeeze(shadowb)
+    
+    @tfmethod(0)
+    def get_samplers(self, nsamples=1, coupled=False):
+        condition = tf.ones((nsamples, 1, 1), dtype=dtype)
+        samplers = []
+
+        if self.left_canonical:
+            sequence = zip([tf.transpose(c, [0,2,1]) for c in self.cores[-1::-1]],
+                           self.inner_marginal[-1::-1])
+        else:
+            sequence = zip(self.cores, self.outer_marginal)
+
+        for index, (core, marginal) in enumerate(sequence):
+            if self.right_canonical or self.left_canonical:
+                distribution = tf.trace(
+                    batch_inner_broadcast(condition, core))
+            else:
+                distribution = tf.einsum(
+                    'bkij,ji', batch_inner_broadcast(condition, core),
+                    marginal)
+
+            reparam = CategoricalReparam(
+                tf.log(1e-16+distribution),
+                temperature=self.temperatures[index], coupled=coupled)
+
+            samplers += [reparam]
+
+            update = tf.einsum('kij,bk', core,
+                                     reparam.b)
+            condition = tf.einsum('bik,bkl,blj->bij',
+                                        tf.transpose(update, [0,2,1]),
+                                        condition, update)
+        if self.left_canonical:
+            return samplers[-1::-1]
+        else:
+            return samplers
 
     @tfmethod(0)
-    def sample(self, nsamples=1, doshadowsample=False, coupled=False):
+    def get_shadowsamplers(self, samplers):
+        nsamples = samplers[0].b.shape[0]
+        condition = tf.ones((nsamples, 1, 1), dtype=dtype)
+        shadowsamplers = []
+
+        if self.left_canonical:
+            sequence = zip([tf.transpose(c, [0,2,1]) for c in self.cores[-1::-1]],
+                           self.inner_marginal[-1::-1], samplers[-1::-1])
+        else:
+            sequence = zip(self.cores, self.outer_marginal, samplers)
+
+        for index, (core, marginal, sampler) in enumerate(sequence):
+            if self.right_canonical or self.left_canonical:
+                distribution = tf.trace(
+                    batch_inner_broadcast(condition, core))
+            else:
+                distribution = tf.einsum(
+                    'bkij,ji', batch_inner_broadcast(condition, core),
+                    marginal)
+
+            reparam = CategoricalReparam(
+                tf.log(1e-16+distribution),
+                noise=sampler.u, cond_noise=sampler.v,
+                temperature=self.temperatures[index])
+
+            shadowsamplers += [reparam]
+
+            #shadowsampler difference
+            update = tf.einsum('kij,bk', core,
+                                     reparam.gatedz)
+            condition = tf.einsum('bik,bkl,blj->bij',
+                                        tf.transpose(update, [0,2,1]),
+                                        condition, update)
+        if self.left_canonical:
+            return shadowsamplers[-1::-1]
+        else:
+            return shadowsamplers
+    
+
+    @tfmethod(0)
+    def simplerebar(self, nsamples=1, samplers=None, gated=True):
+        if samplers is None:
+            samplers = self.get_samplers(nsamples)
+        else:
+            assert(samplers[0].param.shape[0]==nsamples)
+        bsamples = []
+        zsamples = []
+        zbsamples = []
+        for sampler in samplers:
+            bsamples += [sampler.b]
+            zsamples += [sampler.gatedz if gated else sampler.z]
+            zbsamples += [sampler.gatedzb if gated else sampler.zb]
+        collect = lambda samples: tf.transpose(tf.stack(samples), [1,0,2])
+        return (collect(bsamples), collect(zsamples), collect(zbsamples))
+    
+    @tfmethod(0)
+    def shadowrelax(self, nsamples=1,samplers=None):
+        if samplers is None:
+            samplers = self.get_samplers(nsamples)
+        else:
+            assert(samplers[0].param.shape[0]==nsamples)
+        bsamples = []
+        zsamples = []
+        zbsamples = []
+        shadowsamplers = self.get_shadowsamplers(samplers)
+
+        condition = tf.ones((nsamples, 1, 1), dtype=dtype)
+        
+        #flip to exploit canonicity
+        if self.left_canonical:
+            sequence = zip([tf.transpose(c, [0,2,1]) for c in self.cores[-1::-1]],
+                           self.inner_marginal[-1::-1], samplers[-1::-1], shadowsamplers[-1::-1])
+        else:
+            sequence = zip(self.cores, self.outer_marginal, samplers, shadowsamplers)
+
+        for index, (core, marginal, sampler, shadowsampler) in enumerate(sequence):
+            if self.right_canonical or self.left_canonical:
+                distribution = tf.trace(
+                    batch_inner_broadcast(condition, core))
+            else:
+                distribution = tf.einsum(
+                    'bkij,ji', batch_inner_broadcast(condition, core),
+                    marginal)
+
+            conditionalzb = shadowsampler.softgate(tf.log(1e-16+distribution) + sampler.zb - sampler.param, shadowsampler.temperature)
+            
+            bsamples += [sampler.b]
+            zsamples += [shadowsampler.gatedz]
+            zbsamples += [conditionalzb]
+            
+            update = tf.einsum('kij,bk', core, conditionalzb)
+            condition = tf.einsum('bik,bkl,blj->bij',
+                                        tf.transpose(update, [0,2,1]),
+                                        condition, update)
+        
+        #flip back
+        if self.left_canonical:
+            bsamples = bsamples[-1::-1]
+            zsamples = zsamples[-1::-1]
+            zbsamples = zbsamples[-1::-1]
+        
+        collect = lambda samples: tf.transpose(tf.stack(samples), [1,0,2])
+        return (collect(bsamples), collect(zsamples), collect(zbsamples))
+    
+    @tfmethod(0)
+    def sample(self, nsamples=1, doshadowsample=False, coupled=False, raw=False):
         '''Runs ancestral sampling routine and calculates necessary
         reparameterized quantities for a REBAR estimator.
         See softsample() for more info on shadow MPS.
@@ -535,12 +656,12 @@ class MPS:
             if normalized:
                 conditionals = conditionals - tf.reduce_logsumexp(conditionals,
                                                                   axis=-1,
-                                                                  keep_dims=True)
+                                                                  keepdims=True)
         else:
             if normalized:
                 condititionals = conditionals/tf.reduce_sum(conditionals,
                                                             axis=-1,
-                                                            keep_dims=True)
+                                                            keepdims=True)
         return conditionals
 
     def collocation(self, nsamples=100000):
@@ -599,13 +720,9 @@ class MPS:
         marginals = self.marginals()
         return entropy(marginals)
 
-    @tfmethod(0)
-    def elbo(self, f, nsamples=1, fold=False, differentiable=True, marginal=True, invtemp=1., cvweight=1., report=False):
+    @tfmethod(1)
+    def elbo(self, samples, f, fold=False, marginal=True, invtemp=1., cvweight=1., report=False):
         '''calculate ELBO or another entropy-weighted expectation using nsamples MC samples'''
-        if differentiable:
-            samples = self.softsample(nsamples)
-        else:
-            samples = self.sample(nsamples)
         if fold:
             llk = tf.map_fn(f, samples)
         else:
@@ -698,6 +815,114 @@ class MPS:
 
     def var_params(self):
         return [self._tempvar, self._nuvar]
+
+class unimix(MPS):
+    def __init__(self, N, K, ranks, cores=None, normalized=True, multi_temp=False):
+        super().__init__(N, K, ranks, cores=cores, normalized=normalized, multi_temp=multi_temp)
+        self.logalpha_var =  tf.Variable(0., dtype=dtype)
+        self.logalpha = -tf.nn.softplus(self.logalpha_var) 
+        self.log1malpha = -tf.nn.softplus(-self.logalpha_var) 
+        self.log_uniform = tf.convert_to_tensor(-self.N*np.log(self.K), dtype=dtype)
+
+    @tfmethod(1)
+    def batch_logp_mps(self, Z):
+        return super().batch_logp(Z)
+
+    @tfmethod(1)    
+    def batch_logp(self, Z):
+        def vec_scalar_logsumexp(vec, scalar):
+            return tf.reduce_logsumexp(tf.stack([vec, scalar*tf.ones(vec.shape, dtype=dtype)],axis=1),axis=1)
+        return vec_scalar_logsumexp(self.logalpha + super().batch_logp(Z), 
+                                    self.log1malpha + self.log_uniform)
+    @tfmethod(1)
+    def elbo(self, samples, f, fold=False):
+        '''calculate ELBO or another entropy-weighted expectation using nsamples MC samples'''
+        gumbels = -tf.log(-tf.log(tf.random_uniform(samples.shape)))
+        usamples = tf.one_hot(tf.argmax(gumbels, axis=-1), self.K, dtype=dtype)
+        if fold:
+            llk = tf.map_fn(f, samples)
+            ullk = tf.map_fn(f, usamples)
+        
+        else:
+            llk = f(samples)
+            ullk = f(usamples)
+            
+        entropy = -self.batch_logp(samples)
+        uentropy = -self.batch_logp(usamples)
+        return tf.exp(self.logalpha)*(llk + entropy) + tf.exp(self.log1malpha)*(ullk + uentropy)
+
+    @tfmethod(0)
+    def populatetensor(self):
+        q = super().populatetensor()
+        mixq = tf.exp(self.logalpha)*q
+        mixuniform = tf.exp(self.log1malpha + self.log_uniform)
+        return mixq + mixuniform
+
+    @tfmethod(1)
+    def set_alpha_op(self, alpha):
+        logalpha_hat = tf.log(alpha)
+        return tf.assign(self.logalpha_var, tf.log(tf.exp(-logalpha_hat)-1.))
+
+class unimixIS(unimix):
+    def batch_logp(self, Z):
+        return tf.log(self.mps.batch_contraction(Z))
+    
+    @tfmethod(1)    
+    def batch_logp_proposal(self, Z):
+        def vec_scalar_logsumexp(vec, scalar):
+            return tf.reduce_logsumexp(tf.stack([vec, scalar*tf.ones(vec.shape, dtype=dtype)],axis=1),axis=1)
+        logp = tf.reshape(tf.log(self.mps.batch_contraction(Z)), (-1,))
+        return vec_scalar_logsumexp(self.logalpha + logp, 
+                                    self.log1malpha + self.log_uniform)
+
+    @tfmethod(1)
+    def elbo_q(self, samples, f, fold=False):
+        '''calculate ELBO or another entropy-weighted expectation using nsamples MC samples'''
+        if fold:
+            llk = tf.map_fn(f, samples)
+        else:
+            llk = f(samples)
+        logq = self.batch_logp(samples)
+        correction = self.logalpha + logq - self.batch_logp_proposal(samples)
+        elbo = tf.exp(correction)*(llk - logq)
+        return elbo
+
+    @tfmethod(1)
+    def elbo_uni(self, samples, f, fold=False):
+        '''calculate ELBO or another entropy-weighted expectation using nsamples MC samples'''
+        if fold:
+            llk = tf.map_fn(f, samples)
+        else:
+            llk = f(samples)
+        logq = self.batch_logp(samples)
+        correction = self.log1malpha + logq - self.batch_logp_proposal(samples)
+        elbo = tf.exp(correction)*(llk - logq)
+        return elbo
+
+    def var_params(self):
+        return super().var_params()
+
+@tffunc(1,1)
+def buildcontrol(samples, flogp, f, fhat =None, nu=1., fold=False):
+    '''Runs ancestral sampling routine on MPS and auxiliary shadow model
+    and calculates necessary reparameterized quantities for a
+    RELAX estimator.
+    '''
+    if fhat is None:
+        fhat = f
+    b, shadowb, conditionalshadowb = samples
+    if fold:
+        loss = tf.map_fn(f, b)
+        control = tf.map_fn(fhat, shadowb)
+        conditional_control = tf.map_fn(fhat, conditionalshadowb)
+    else:
+        loss = f(b)
+        control = fhat(shadowb)
+        conditional_control = fhat(conditionalshadowb)
+
+    logp = flogp(b)
+    return (loss, nu*control, nu*conditional_control, logp)
+    
 
 def inner_product(mps1, mps2):
     cores1 = mps1.cores
@@ -820,8 +1045,33 @@ class Core:
 
     def params(self):
         return self.cores
+
     def randomize_op(self):
         return tf.group(tuple([tf.assign(var, tf.random_normal(var.shape, dtype=dtype)) for var in self.params()]))
+
+    def match(self, core0):
+        return tf.group(tuple([tf.assign(var, var0) for var, var0 in zip(self.params(), core0.params())]))
+
+class DiagCore(Core):
+    def __init__(self, N, K, rank, diags=None):
+        self.N = N
+        self.K = K
+        self.drank = rank
+        self.ranks = (1,) + (self.drank,)*(N-1) + (1,)
+        self.core_shapes = list(zip(self.ranks[:-1], self.ranks[1:])) 
+        self.right_canonical = False
+        self.left_canonical = False
+
+        if diags is not None:
+            self.diags = diags
+        else:
+            self.diags = ([tf.Variable(tf.ones((K,1,self.drank), dtype=dtype))] + 
+                          [tf.Variable(tf.ones((K,self.drank), dtype=dtype)) for _ in range(N-2)] + 
+                          [tf.Variable(tf.ones((K,self.drank,1), dtype=dtype))])
+        self.cores =  [self.diags[0]] + [tf.stack([tf.diag(d) for d in tf.unstack(diag)]) for diag in self.diags[1:-1]] + [self.diags[-1]]
+    def params(self):
+        return self.diags
+
 
 class Canonical(Core):
     '''
