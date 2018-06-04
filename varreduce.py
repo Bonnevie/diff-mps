@@ -23,7 +23,7 @@ N = 6
 X = X[:N,:N]
 
 #FLAGS
-name = 'test' 
+name = 'paper' 
 version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -276,24 +276,8 @@ with tf.name_scope("model"):
                     #df_c['bias'][configc] = bias
                     #df_c['obsbias'][configc] = np.linalg.norm(grad0-mean, ord=2)
             
-save_name = folder + config_full_name + '_optrank.pkl'
+save_name = folder + config_full_name + '_varreduce.pkl'
 #qdict = {key:tn.packmps("q", val, sess=sess) for key, val in q.items()}
 supdict = {'name': save_name, 'df_c':df_c}
-with open(folder + config_full_name + '_optrank.pkl','wb') as handle:
+with open(folder + config_full_name + '_varreduce.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-def allit():
-    for config in tqdm.tqdm(all_config, total=config_count):
-        configc = config + (checkin,)
-        gsamples = np.stack([sess.run(flatgrad[config]) for _ in range(ngsamples)])
-        grad0 = sess.run(truegrad[config])
-        residuals = gsamples - grad0[None,:]
-        deviations = gsamples - np.mean(gsamples, axis=0, keepdims=True)
-        residualnorm = np.square(np.linalg.norm(residuals, ord=2, axis=1)).mean()
-        variance = (1./(ngsamples-1))*np.square(np.linalg.norm(deviations, ord=2, axis=1)).sum()
-        bias = residualnorm - variance
-
-        df_c['residual'][configc] = residualnorm
-        df_c['variance'][configc] = variance
-        df_c['bias'][configc] = bias
-
