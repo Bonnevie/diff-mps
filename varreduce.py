@@ -43,7 +43,7 @@ coretype = 'canon'
 objectives = ['shadow','relax','relax-marginal','relax-varreduce'] #options: shadow, relax, relax-marginal
 #,'perm'] #types of cores to try 
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
-maxranks = [4]#,12,15,18]
+maxranks = [1]#,12,15,18]
 
 
 factor_code = ['R','S','L']
@@ -256,8 +256,8 @@ with tf.name_scope("model"):
                     gsamples = np.stack([sess.run(flatgrad[config]) for _ in range(ngsamples)])
                     grad0 = sess.run(truegrad[config])
                     residuals = gsamples - grad0[None,:]
-                    mean = np.mean(gsamples, axis=0, keepdims=True)
-                    deviations = gsamples - mean
+                    mean = np.mean(gsamples, axis=0)
+                    deviations = gsamples - mean[None, :]
                     
                     residual = np.square(residuals).mean(axis=0)
                     variance = (1./(ngsamples-1))*np.square(deviations).sum(axis=0)
