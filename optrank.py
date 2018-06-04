@@ -173,3 +173,4 @@ save_name = folder + config_full_name + '_optrank.pkl'
 supdict = {'name': save_name, 'df_c':df_c, 'df_p':df_p, 'logZ': logZ, 'X':X}
 with open(folder + config_full_name + '_optrank.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+

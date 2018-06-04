@@ -232,6 +232,55 @@ def unpackmps(metadata, sess=None):
     sess.run(mass_assign)
     return (mps, cores, mass_assign, metadata)
 
+class Initializer:
+    '''class for co-initializing several sets of cores, as well as saving and restoring from checkpoints.'''
+    def __init__(self, list_of_cores):
+        self.cores = list_of_cores
+        self.init_cores = {}
+        self.matchers = []
+        self.randomizers = []
+        self.checkpoints = {}
+        self.init_checkpoints = {}
+        for core in self.cores:
+            key = (core.N, core.K, core.ranks, core.__class__)
+            try:
+                self.matchers += [core.match(self.init_cores[key])]
+            except KeyError:
+                self.init_cores[key] = key[-1](key[0],key[1],key[2])
+                self.matchers += [core.match(self.init_cores[key])]
+                self.randomizers += [self.init_cores[key].randomize_op()] 
+
+    def randomize(self):
+        return tf.group(self.randomizers)
+    
+    def match(self):
+        return tf.group(self.matchers)
+
+    def checkpoint_init(self, key, sess=None):
+        if sess is None:
+            sess = tf.get_default_session()
+        self.init_checkpoints[key] = {}
+        for initkey, initcore in self.init_cores.items():
+            self.init_checkpoints[key][initkey] = [sess.run(param) for param in initcore.params()]
+
+    def restore_init(self, key):
+        for initkey, initcore in self.init_cores.items():
+            mass_assign = [tf.assign(var, value) for var, value in zip(initcore.params(), self.init_checkpoints[key][initkey])]
+        return tf.group(mass_assign)
+
+    def checkpoint_cores(self, key, sess=None):
+        if sess is None:
+            sess = tf.get_default_session()
+        self.checkpoints[key] = {}
+        for core in self.cores:
+            self.checkpoints[key][core] =  [sess.run(param) for param in core.params()]
+
+    def restore_cores(self, key):
+        for core in self.cores:
+            mass_assign = [tf.assign(var, value) for var, value in zip(core.params(), self.checkpoints[key][core])]
+        return tf.group(mass_assign)
+
+
 class MPS:
     """
         Instances represent discrete distributions over N discrete random variables
@@ -467,23 +516,6 @@ class MPS:
         else:
             return shadowsamplers
     
-
-    @tfmethod(0)
-    def simplerebar(self, nsamples=1, samplers=None, gated=True):
-        if samplers is None:
-            samplers = self.get_samplers(nsamples)
-        else:
-            assert(samplers[0].param.shape[0]==nsamples)
-        bsamples = []
-        zsamples = []
-        zbsamples = []
-        for sampler in samplers:
-            bsamples += [sampler.b]
-            zsamples += [sampler.gatedz if gated else sampler.z]
-            zbsamples += [sampler.gatedzb if gated else sampler.zb]
-        collect = lambda samples: tf.transpose(tf.stack(samples), [1,0,2])
-        return (collect(bsamples), collect(zsamples), collect(zbsamples))
-    
     @tfmethod(0)
     def shadowrelax(self, nsamples=1,samplers=None):
         if samplers is None:
@@ -666,7 +698,7 @@ class MPS:
 
     def collocation(self, nsamples=100000):
         if nsamples > 0:
-            z = self.softsample(nsamples)
+            z = self.sample(nsamples)
             return tf.einsum('bik,bjk', z, z)/nsamples
         else:
             transfers = [multikron(core, core) for core in self.cores]
@@ -812,6 +844,9 @@ class MPS:
                                                         dtype=dtype),
                                                 normalized=False),
                                name="scale")
+
+    def params(self):
+        return cores.raw.params()
 
     def var_params(self):
         return [self._tempvar, self._nuvar]
@@ -1125,11 +1160,12 @@ class Canonical(Core):
                 self.initials.append(I[:shape_factor[0]*ranks[0],
                                        :shape_factor[1]*ranks[1]])
         else:
+            self.initials = initials
             for initial, rank0, rank1 in zip(self.initials, self.ranks[:-1],
                                             self.ranks[1:]):
                 assert(initial.shape == (shape_factor[0]*rank0,
                                          shape_factor[1]*rank1))
-            self.initials = initials
+            
 
         with tf.name_scope("orthogonal"):
             #orthogonal matrices
