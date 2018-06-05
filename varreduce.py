@@ -43,7 +43,7 @@ coretype = 'canon'
 objectives = ['shadow','relax','relax-marginal','relax-varreduce'] #options: shadow, relax, relax-marginal
 #,'perm'] #types of cores to try 
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
-maxranks = [1]#,12,15,18]
+maxranks = [4]#,12,15,18]
 
 
 factor_code = ['R','S','L']
