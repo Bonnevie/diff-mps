@@ -23,7 +23,7 @@ N = 6
 X = X[:N,:N]
 
 #FLAGS
-name = 'paper' 
+name = 'mega' 
 version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -32,7 +32,7 @@ folder = name + 'V{}K{}'.format(version, K)
 #factors variations to run experiments over
 random_restarts = 1
 varrelaxsteps = 10000
-ngsamples = 100000
+ngsamples = 1000000
 
 rate = 1e-3#[1e-1,1e-2,1e-3]
 decay = 0.9
@@ -40,7 +40,7 @@ optimizer = 'ams' #options: ams
 nsample = 1
 coretype = 'canon'
 
-objectives = ['shadow','relax','relax-marginal','relax-varreduce'] #options: shadow, relax, relax-marginal
+objectives = ['shadow', 'relax', 'relax-marginal', 'relax-varreduce'] #options: shadow, relax, relax-marginal
 #,'perm'] #types of cores to try 
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
 maxranks = [4]#,12,15,18]
@@ -61,7 +61,6 @@ tf.reset_default_graph()
 
 
 
-
 #generate mask of observed edges
 if Ntest > 0:
     mask = np.random.randn(N,N) + np.triu(np.inf*np.ones(N))
@@ -76,7 +75,7 @@ else:
     mask = np.triu(mask, 1)
     mask = tf.convert_to_tensor(mask.astype(dtype))
 
-concentration = 5.
+concentration = 1.25
 a = 1. + (concentration-1.)*np.eye(K)
 b = concentration - (concentration-1.)*np.eye(K) 
 
@@ -85,6 +84,7 @@ all_anchors = tf.stack([np.eye(K)[list(index)] for index in np.ndindex((K,)*N)])
 p = CollapsedStochasticBlock(N, K, alpha=1, a=a, b=b)
 logp = lambda sample: p.batch_logp(sample, X, observed=mask)
 logp_all = logp(all_anchors)
+
 
 beta1=tf.Variable(0.9,dtype='float64')
 beta2=tf.Variable(0.999,dtype='float64')
@@ -101,6 +101,7 @@ flatgrad = {}
 decay_stage = tf.Variable(1, name='decay_stage', trainable=False, dtype=tf.int32)
 increment_decay_stage_op = tf.assign(decay_stage, decay_stage+1)
 
+var_reset = []
 coregroup = [[] for _ in range(random_restarts)]
 
 def flattengrad(grad_and_vars):
@@ -194,7 +195,11 @@ with tf.name_scope("model"):
             step[config] = stepper.apply_gradients(var_grad)
         else:
             step[config] = tf.no_op()
-        
+
+        var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+    
+    var_reset += [tf.assign(decay_stage, 0)]
+    var_reset = tf.group(var_reset)
     all_steps = tf.group(list(step.values()) + [increment_decay_stage_op])
     initializers = []
     for index in range(random_restarts):
@@ -249,6 +254,7 @@ with tf.name_scope("model"):
                 print("at {}".format(checkin))
                 sess.run(restore(checkin))
                 sess.run(reset)
+                sess.run(var_reset)
                 for it in tqdm.trange(varrelaxsteps):
                     sess.run(all_steps)
                 for config in tqdm.tqdm(all_config, total=config_count):
@@ -277,7 +283,7 @@ with tf.name_scope("model"):
                     #df_c['obsbias'][configc] = np.linalg.norm(grad0-mean, ord=2)
             
 save_name = folder + config_full_name + '_varreduce.pkl'
-#qdict = {key:tn.packmps("q", val, sess=sess) for key, val in q.items()}
-supdict = {'name': save_name, 'df_c':df_c}
+qdict = {key:tn.packmps("q", val, sess=sess) for key, val in q.items()}
+supdict = {'name': save_name, 'df_c':df_c, 'q': qdict, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers]}
 with open(folder + config_full_name + '_varreduce.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
