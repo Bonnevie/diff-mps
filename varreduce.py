@@ -19,11 +19,11 @@ from AMSGrad.optimizers import AMSGrad as amsgrad
 
 with open("karatenet.pkl", "rb") as file:
     X = pickle.load(file)
-N = 6
+N = 3
 X = X[:N,:N]
 
 #FLAGS
-name = 'mega' 
+name = 'longtrain' 
 version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -31,16 +31,16 @@ folder = name + 'V{}K{}'.format(version, K)
 
 #factors variations to run experiments over
 random_restarts = 1
-varrelaxsteps = 10000
-ngsamples = 1000000
+varrelaxsteps = 50000
+ngsamples = 20000
 
-rate = 1e-3#[1e-1,1e-2,1e-3]
+rate = 1e-1#[1e-1,1e-2,1e-3]
 decay = 0.9
 optimizer = 'ams' #options: ams
-nsample = 1
+nsample = 100
 coretype = 'canon'
 
-objectives = ['shadow', 'relax', 'relax-marginal', 'relax-varreduce'] #options: shadow, relax, relax-marginal
+objectives = ['shadow', 'relax-marginal', 'relax-varreduce'] #options: shadow, relax, relax-marginal
 #,'perm'] #types of cores to try 
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
 maxranks = [4]#,12,15,18]
@@ -152,7 +152,7 @@ with tf.name_scope("model"):
         else:
             learningrate = rate
         
-        if optimizer is 'ams':
+        if optimizer == 'ams':
             stepper = amsgrad(learning_rate=learningrate, beta1=beta1, beta2=beta2, epsilon=epsilon)
         
         control_samples = q[config].shadowrelax(nsample)
@@ -160,25 +160,25 @@ with tf.name_scope("model"):
         logq = q[config].batch_logp(all_anchors)
         trueloss[config] =  -tf.reduce_mean(tf.exp(logq)*(logp_all-logq))
         truegrad[config] = flattenlist(tf.gradients(trueloss[config], cores[config].params()))
-        if objective is 'shadow':
+        if objective == 'shadow':
             loss = -tf.reduce_mean(q[config].elbo(control_samples[1], logp, marginal=False))
             grad = stepper.compute_gradients(loss, var_list=cores[config].params())
             var_grad = None
-        elif objective is 'relax':
+        elif objective == 'relax':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=q[config].nu)
             var_grad = None
-        elif objective is 'relax-varreduce':
+        elif objective == 'relax-varreduce':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params(), weight=q[config].nu)
-        elif objective is 'relax-marginal':
+        elif objective == 'relax-marginal':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=q[config].nu)
             var_grad = None
-        elif objective is 'relax-marginal-varreduce':
+        elif objective == 'relax-marginal-varreduce':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params(), weight=q[config].nu)
@@ -196,7 +196,7 @@ with tf.name_scope("model"):
         else:
             step[config] = tf.no_op()
 
-        var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+        var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.5)]
     
     var_reset += [tf.assign(decay_stage, 0)]
     var_reset = tf.group(var_reset)
@@ -212,12 +212,12 @@ with tf.name_scope("model"):
     for index, initializer in enumerate(initializers):
         baselines[index] = {}
         baseopt[index] = {}
-        for key, cores in initializer.init_cores.items():
+        for key, core in initializer.init_cores.items():
             N, K, ranks, _ = key
-            baselines[index][key] = tn.MPS(N, K, ranks, cores=cores)
+            baselines[index][key] = tn.MPS(N, K, ranks, cores=core)
             logq = baselines[index][key].batch_logp(all_anchors)
             loss = -tf.reduce_mean(tf.exp(logq)*(logp_all-logq))
-            baseopt[index][key] = lambda it: tf.contrib.opt.ScipyOptimizerInterface(loss, cores.params(), options={'maxiter': it})
+            baseopt[index][key] = lambda it: tf.contrib.opt.ScipyOptimizerInterface(loss, core.params(), options={'maxiter': it})
             baseopt_flat += [baseopt[index][key]]
     
     randomize = tf.group([initializer.randomize() for initializer in initializers])
@@ -236,6 +236,8 @@ with tf.name_scope("model"):
     index_c = pd.MultiIndex.from_product(factors + [stages] + [np.arange(num_vars)], names=factor_names + ['stage', 'parameter'])
     df_c = pd.DataFrame(np.zeros((config_count*len(stages)*num_vars,len(column_names))), index=index_c, columns=column_names)
     
+    vartrace = {}
+
     sess = tf.Session()
     sess.run(init)
     sess.run(randomize)
@@ -250,13 +252,22 @@ with tf.name_scope("model"):
                 bopt(1000).minimize()
             checkpoint("converged")
             
-            for checkin in stages:
+            for checkin in tqdm.tqdm(stages):
                 print("at {}".format(checkin))
                 sess.run(restore(checkin))
                 sess.run(reset)
                 sess.run(var_reset)
                 for it in tqdm.trange(varrelaxsteps):
                     sess.run(all_steps)
+                    for config in all_config:
+                        configc = config + (checkin, )
+                        try:
+                            vartrace[configc]['temp'] += [sess.run(q[config].temperatures)[0]]
+                            vartrace[configc]['nu'] += [sess.run(q[config].nu)]
+                        except KeyError: 
+                            vartrace[configc] = {}
+                            vartrace[configc]['temp'] = [sess.run(q[config].temperatures)[0]]
+                            vartrace[configc]['nu'] = [sess.run(q[config].nu)]
                 for config in tqdm.tqdm(all_config, total=config_count):
                     configc = config + (checkin, slice(None))
                     gsamples = np.stack([sess.run(flatgrad[config]) for _ in range(ngsamples)])

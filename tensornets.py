@@ -3,6 +3,7 @@ import tensorflow as tf
 import pickle
 from relaxflow.reparam import CategoricalReparam, categorical_forward, categorical_backward
 dtype = 'float64'
+epsilon = 1e-8
 
 from tfutils import tffunc, tfmethod, HouseholderChain
 select_max = lambda z, K: tf.one_hot(tf.argmax(z, axis=-1), K, dtype=dtype)
@@ -122,7 +123,7 @@ class CayleyOrthogonal:
 
 @tffunc(1)
 def entropy(P):
-    return -tf.reduce_sum(P*tf.log(1e-16+P))
+    return -tf.reduce_sum(P*tf.log(epsilon+P))
 
 @tffunc(2)
 def inner_broadcast(density, core, opt_einsum=False):
@@ -208,9 +209,10 @@ def packmps(name, mps, sess=None):
     if sess is None:
         sess = tf.get_default_session()
     hardcopy = [sess.run(param) for param in mps.raw.params()]
-
+    tune_metadata = {'temperature': sess.run(mps.temperatures), 'nu': sess.run(mps.nu)}
+    
     metadata = {'basic': basic_metadata, 'hardcopy': hardcopy,
-                'core': core_metadata, 'mps': mps_metadata}
+                'core': core_metadata, 'mps': mps_metadata, 'tune': tune_metadata}
     return metadata
     
 def dictpack(name, dictionary, folder='', sess=None):
@@ -227,6 +229,12 @@ def unpackmps(metadata, sess=None):
                     [tf.assign(var, value)
                     for var, value in
                     zip(cores.params(), metadata['hardcopy'])])
+    mass_assign += [mps.set_nu(metadata['tune']['nu'])]
+    if metadata['mps']['multi_temp']:
+        mass_assign += [mps.set_temperature(metadata['tune']['temperature'])]
+    else:
+        mass_assign += [mps.set_temperature(metadata['tune']['temperature'][0])]
+    
     if sess is None:
         sess = tf.get_default_session()
     sess.run(mass_assign)
@@ -391,7 +399,7 @@ class MPS:
 
     @tfmethod(1)
     def batch_logp(self, Z):
-        return tf.log(1e-16+self.batch_contraction(Z, normalized=True))
+        return tf.log(epsilon+self.batch_contraction(Z, normalized=True))
 
     @tfmethod(0)
     def softsample(self, nsamples=1):
@@ -425,7 +433,7 @@ class MPS:
                     marginal)
 
             shadowreparam = CategoricalReparam(
-                tf.log(1e-16+shadowdistribution),
+                tf.log(epsilon+shadowdistribution),
                 temperature=self.temperatures[index])
 
             shadowsample = shadowreparam.gatedz
@@ -462,7 +470,7 @@ class MPS:
                     marginal)
 
             reparam = CategoricalReparam(
-                tf.log(1e-16+distribution),
+                tf.log(epsilon+distribution),
                 temperature=self.temperatures[index], coupled=coupled)
 
             samplers += [reparam]
@@ -499,7 +507,7 @@ class MPS:
                     marginal)
 
             reparam = CategoricalReparam(
-                tf.log(1e-16+distribution),
+                tf.log(epsilon+distribution),
                 noise=sampler.u, cond_noise=sampler.v,
                 temperature=self.temperatures[index])
 
@@ -545,7 +553,7 @@ class MPS:
                     'bkij,ji', batch_inner_broadcast(condition, core),
                     marginal)
 
-            conditionalzb = shadowsampler.softgate(tf.log(1e-16+distribution) + sampler.zb - sampler.param, shadowsampler.temperature)
+            conditionalzb = shadowsampler.softgate(tf.log(epsilon+distribution) + sampler.zb - sampler.param, shadowsampler.temperature)
             
             bsamples += [sampler.b]
             zsamples += [shadowsampler.gatedz]
@@ -611,7 +619,7 @@ class MPS:
                     marginal)
 
             reparam = CategoricalReparam(
-                tf.log(1e-16+distribution),
+                tf.log(epsilon+distribution),
                 temperature=self.temperatures[index])
 
             sample = reparam.b
@@ -761,14 +769,14 @@ class MPS:
             llk = f(samples)
         if marginal:
             marginals = self.marginals()
-            marginalentropy = -tf.reduce_sum(marginals * tf.log(1e-16+marginals))
+            marginalentropy = -tf.reduce_sum(marginals * tf.log(epsilon+marginals))
             marginalcv = (marginalentropy +
                           tf.reduce_sum(samples *
-                                        tf.log(1e-16+marginals)[None, :, :],
+                                        tf.log(epsilon+marginals)[None, :, :],
                                         axis=[1, 2]))
         else:
             marginalcv = 0.
-        entropy = -tf.log(1e-16+self.batch_contraction(samples))
+        entropy = -tf.log(epsilon+self.batch_contraction(samples))
         elbo = llk + entropy + cvweight*marginalcv
         objective = llk + invtemp*(entropy + cvweight*marginalcv)
         if report:
@@ -789,16 +797,16 @@ class MPS:
 
         if marginal:
             marginals = self.marginals()
-            marginalentropy = -tf.reduce_sum(marginals * tf.log(1e-16+marginals))
+            marginalentropy = -tf.reduce_sum(marginals * tf.log(epsilon+marginals))
             marginalcv = (marginalentropy +
                           tf.reduce_sum(samples *
-                                        tf.log(1e-16+marginals)[None, :, :],
+                                        tf.log(epsilon+marginals)[None, :, :],
                                         axis=[1, 2]))
         else:
             marginalcv = 0.
-        entropy = -tf.log(1e-16+self.batch_contraction(samples))
+        entropy = -tf.log(epsilon+self.batch_contraction(samples))
         modeweight = self.batch_contraction(modes)
-        modeentropy = -tf.log(1e-16+modeweight)
+        modeentropy = -tf.log(epsilon+modeweight)
         elbo = llk + entropy + cvweight*marginalcv
         objective = llk + invtemp*(entropy + cvweight*marginalcv)  + tf.reduce_sum(modeweight*(modellk+modeentropy))
         if report:
@@ -846,7 +854,7 @@ class MPS:
                                name="scale")
 
     def params(self):
-        return cores.raw.params()
+        return self.raw.params()
 
     def var_params(self):
         return [self._tempvar, self._nuvar]
