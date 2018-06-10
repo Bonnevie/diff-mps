@@ -398,6 +398,14 @@ class MPS:
         return tf.reshape(S, (-1,))
 
     @tfmethod(1)
+    def batch_root(self, Z):
+        batches = Z.shape[0]
+        S = tf.ones((batches, 1), dtype=dtype)
+        for core, z in zip(self.cores, tf.unstack(Z, axis=1)):
+            S = tf.einsum('bi,kij,bk->bj', S, core, z)
+        return tf.reshape(S, (-1,))
+
+    @tfmethod(1)
     def batch_logp(self, Z):
         return tf.log(epsilon+self.batch_contraction(Z, normalized=True))
 
@@ -945,6 +953,8 @@ class unimixIS(unimix):
     def var_params(self):
         return super().var_params()
 
+
+
 @tffunc(1,1)
 def buildcontrol(samples, flogp, f, fhat =None, nu=1., fold=False):
     '''Runs ancestral sampling routine on MPS and auxiliary shadow model
@@ -966,7 +976,6 @@ def buildcontrol(samples, flogp, f, fhat =None, nu=1., fold=False):
     logp = flogp(b)
     return (loss, nu*control, nu*conditional_control, logp)
     
-
 def inner_product(mps1, mps2):
     cores1 = mps1.cores
     cores2 = mps2.cores

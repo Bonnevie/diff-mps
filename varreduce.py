@@ -23,7 +23,7 @@ N = 3
 X = X[:N,:N]
 
 #FLAGS
-name = 'longtrain' 
+name = 'allinclusive' 
 version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -31,16 +31,17 @@ folder = name + 'V{}K{}'.format(version, K)
 
 #factors variations to run experiments over
 random_restarts = 1
-varrelaxsteps = 50000
+varrelaxsteps = 40000
 ngsamples = 20000
 
 rate = 1e-1#[1e-1,1e-2,1e-3]
-decay = 0.9
+decay = 0.1
+decay_steps = varrelaxsteps/2.
 optimizer = 'ams' #options: ams
 nsample = 100
 coretype = 'canon'
 
-objectives = ['shadow', 'relax-marginal', 'relax-varreduce'] #options: shadow, relax, relax-marginal
+objectives = ['shadow', 'score', 'relax', 'relax-marginal', 'relax-varreduce', 'relax-marginal-varreduce', 'relax-learned']#['shadow', 'relax-marginal', 'relax-varreduce'] #options: shadow, relax, relax-marginal
 #,'perm'] #types of cores to try 
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
 maxranks = [4]#,12,15,18]
@@ -57,7 +58,8 @@ config_full_name = ''.join([code + '-'.join([str(fact) for fact in factor]) for 
 copy_writer = []
         
 np.random.seed(1)
-tf.reset_default_graph()
+tf.set_random_seed(1.)
+#tf.reset_default_graph()
 
 
 
@@ -148,7 +150,7 @@ with tf.name_scope("model"):
             
         rate = tf.convert_to_tensor(rate, dtype=dtype)
         if decay < 1.:
-            learningrate = tf.train.exponential_decay(rate, decay_stage, 1000, decay)
+            learningrate = tf.train.exponential_decay(rate, decay_stage, decay_steps, decay)
         else:
             learningrate = rate
         
@@ -164,24 +166,51 @@ with tf.name_scope("model"):
             loss = -tf.reduce_mean(q[config].elbo(control_samples[1], logp, marginal=False))
             grad = stepper.compute_gradients(loss, var_list=cores[config].params())
             var_grad = None
+            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.5)]
+        if objective == 'shadow-tight':
+            loss = -tf.reduce_mean(q[config].elbo(control_samples[1], logp, marginal=False))
+            grad = stepper.compute_gradients(loss, var_list=cores[config].params())
+            var_grad = None
+            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
         elif objective == 'relax':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=q[config].nu)
             var_grad = None
+            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+        elif objective == 'score':
+            elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
+            relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
+            grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=0.)
+            var_grad = None
+            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
         elif objective == 'relax-varreduce':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params(), weight=q[config].nu)
+            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
         elif objective == 'relax-marginal':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=q[config].nu)
             var_grad = None
         elif objective == 'relax-marginal-varreduce':
-            elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True)
+            cvweight = tf.Variable(1., dtype=dtype)
+            elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True, cvweight=cvweight)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
-            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params(), weight=q[config].nu)
+            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params() + [cvweight], weight=q[config].nu)
+            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+        elif objective == 'relax-learned':
+            elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True)
+            control_scale = tf.Variable(0., dtype=dtype)
+            control_R = 2
+            control_ranks = tuple(min(K**min(r, N-r), control_R) for r in range(N+1))
+            control_cores = tn.Core(N, K, control_ranks) 
+            control_mps = tn.MPS(N, K, control_ranks, cores=control_cores)
+            control = lambda sample: elbo(sample) + control_scale*control_mps.batch_root(sample)
+            relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
+            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params() + [control_scale] + control_cores.params(), weight=q[config].nu)
+            var_reset += [tf.assign(control_scale, 0.), tf.initialize_variables(control_cores.params())]
         else:
             raise(ValueError)
 
@@ -196,7 +225,7 @@ with tf.name_scope("model"):
         else:
             step[config] = tf.no_op()
 
-        var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.5)]
+        
     
     var_reset += [tf.assign(decay_stage, 0)]
     var_reset = tf.group(var_reset)
@@ -295,6 +324,7 @@ with tf.name_scope("model"):
             
 save_name = folder + config_full_name + '_varreduce.pkl'
 qdict = {key:tn.packmps("q", val, sess=sess) for key, val in q.items()}
-supdict = {'name': save_name, 'df_c':df_c, 'q': qdict, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers]}
+meta = {'name': save_name, 'N': N, 'K': K, 'ngsamples': ngsamples, 'nsamples': nsample, 'random_restarts': random_restarts, 'coretype': coretype, 'optimizer': optimizer, 'rate': rate, 'decay': decay}
+supdict = {'meta': meta, 'df_c':df_c, 'q': qdict, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers], 'checkpoints': [initializer.checkpoints for initializer in initializers], 'traces': vartrace}
 with open(folder + config_full_name + '_varreduce.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
