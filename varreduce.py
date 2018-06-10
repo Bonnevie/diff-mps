@@ -41,7 +41,7 @@ optimizer = 'ams' #options: ams
 nsample = 100
 coretype = 'canon'
 
-objectives = ['shadow', 'score', 'relax', 'relax-marginal', 'relax-varreduce', 'relax-marginal-varreduce', 'relax-learned']#['shadow', 'relax-marginal', 'relax-varreduce'] #options: shadow, relax, relax-marginal
+objectives = ['shadow', 'shadow-tight', 'score', 'relax', 'relax-marginal', 'relax-varreduce', 'relax-marginal-varreduce', 'relax-learned']#['shadow', 'relax-marginal', 'relax-varreduce'] #options: shadow, relax, relax-marginal
 #,'perm'] #types of cores to try 
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
 maxranks = [4]#,12,15,18]
@@ -167,7 +167,7 @@ with tf.name_scope("model"):
             grad = stepper.compute_gradients(loss, var_list=cores[config].params())
             var_grad = None
             var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.5)]
-        if objective == 'shadow-tight':
+        elif objective == 'shadow-tight':
             loss = -tf.reduce_mean(q[config].elbo(control_samples[1], logp, marginal=False))
             grad = stepper.compute_gradients(loss, var_list=cores[config].params())
             var_grad = None
