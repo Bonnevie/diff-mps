@@ -14,7 +14,7 @@ import tensornets as tn
 from itertools import product
 
 #FLAGS
-name = 'full-wr1-wbase' 
+name = 'full-wr1-wbase-corrected' 
 version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -121,7 +121,7 @@ with tf.name_scope("model"):
     logptensor = {N:{} for N in Ns}
     logZ = {N:{} for N in Ns}
     ptensor = {N:{} for N in Ns}
-    bounds = {N:{} for N in Ns}
+    KLmf = {N:{} for N in Ns}
 
     #baseline evaluation
     sess = tf.Session()
@@ -136,7 +136,9 @@ with tf.name_scope("model"):
                 bound = KLcorrectedBound(p[N], X[N][copy], [Z], batch=True, observed=mask[N])
                 sess.run(tf.variables_initializer([Z]))
                 bound.minimize()
-                bounds[N][copy] = sess.run(bound.bound) 
+                Zmf = sess.run(tf.nn.softmax(Z))
+                ptensor_mf = [reduce(np.multiply.outer, vs.T) for vs in Zmf]
+                KLmf[N][copy] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in ptensor_mf] 
 
                 for rank in tqdm.tqdm(maxranks, total=len(maxranks)):
                     pcore, pmps = tn.full2TT(np.sqrt(ptensor[N][copy]), rank, normalized=True)
@@ -176,7 +178,7 @@ with tf.name_scope("model"):
                 df_c['KL'][configc] = kl_c
 
 save_name = folder + config_full_name + '_optrank.pkl'
-supdict = {'name': save_name, 'df_c':df_c, 'df_p':df_p, 'logZ': logZ, 'X':X, 'bounds': bounds}
+supdict = {'name': save_name, 'df_c':df_c, 'df_p':df_p, 'logZ': logZ, 'X':X, 'KLmf': KLmf}
 with open(folder + config_full_name + '_optrank.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 

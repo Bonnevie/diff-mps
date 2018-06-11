@@ -411,7 +411,7 @@ class MPS:
 
     @tfmethod(0)
     def softsample(self, nsamples=1):
-        """Produce a single NxK sample from the shadow MPS, defined as the
+        """Produce a single NxK sample from the induced dMPS, defined as the
         implicit generative model where sample 1 is drawn from the concrete
         relaxation of the marginal, and sample 2 (and so on) is drawn from
         the concrete relaxation of q(x2|x1), where the conditioning is soft:
