@@ -16,9 +16,10 @@ from itertools import product
 
 from AMSGrad.optimizers import AMSGrad as amsgrad
 
+from networkx import karate_club_graph
 
-with open("karatenet.pkl", "rb") as file:
-    X = pickle.load(file)
+karate = karate_club_graph()
+X = nx.adjacency_matrix(karate).toarray().astype('float64')
 N = 3
 X = X[:N,:N]
 
@@ -41,8 +42,7 @@ optimizer = 'ams' #options: ams
 nsample = 100
 coretype = 'canon'
 
-objectives = ['shadow', 'shadow-tight', 'score', 'relax', 'relax-marginal', 'relax-varreduce', 'relax-marginal-varreduce', 'relax-learned']#['shadow', 'relax-marginal', 'relax-varreduce'] #options: shadow, relax, relax-marginal
-#,'perm'] #types of cores to try 
+objectives = ['shadow', 'shadow-tight', 'score', 'relax', 'relax-marginal', 'relax-varreduce', 'relax-marginal-varreduce', 'relax-learned', 'relax-marginal-learned']
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
 maxranks = [4]#,12,15,18]
 
