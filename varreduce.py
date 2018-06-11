@@ -24,7 +24,7 @@ X = X[:N,:N]
 
 #FLAGS
 name = 'allinclusive-corrected' 
-version = 1
+version = 2
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
 folder = name + 'V{}K{}'.format(version, K)

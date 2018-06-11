@@ -335,12 +335,13 @@ class MPS:
 
         self._nuvar = tf.Variable(1., dtype=dtype)
         self.nu = tf.identity(self._nuvar)
+        self._mintemp = 0.01
         if multi_temp:
             self._tempvar = tf.Variable(np.log(np.exp(0.5)-1.)*np.ones(N), dtype=dtype)
-            self.temperatures = tf.nn.softplus(self._tempvar)
+            self.temperatures = self._mintemp + tf.nn.softplus(self._tempvar)
         else:
-            self._tempvar = tf.Variable(np.log(np.exp(0.5)-1.), dtype=dtype)
-            self.temperatures = tf.nn.softplus(self._tempvar)*tf.ones(N, dtype=dtype)
+            self._tempvar = tf.Variable(np.log(np.exp(0.5-self._mintemp)-1.), dtype=dtype)
+            self.temperatures = self._mintemp + tf.nn.softplus(self._tempvar)*tf.ones(N, dtype=dtype)
         self.softgate = lambda z: tf.nn.softmax(z/self.temperature, dim=-1) #scaled softmax
 
         with tf.name_scope("marginalization"):
@@ -363,7 +364,7 @@ class MPS:
             self.outer_marginal = [*outer_marg[-1::-1], initial]
 
     def set_temperature(self, value):
-        return tf.assign(self._tempvar, np.log(np.exp(value)-1.))
+        return tf.assign(self._tempvar, np.log(np.exp(value-self._mintemp)-1.))
 
     def set_nu(self, value):
         return tf.assign(self._nuvar, value)
