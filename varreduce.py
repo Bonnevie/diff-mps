@@ -23,7 +23,7 @@ N = 3
 X = X[:N,:N]
 
 #FLAGS
-name = 'allinclusive' 
+name = 'allinclusive-corrected' 
 version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -202,6 +202,17 @@ with tf.name_scope("model"):
             grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params() + [cvweight[config]], weight=q[config].nu)
             var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1), tf.assign(cvweight[config], 1.)]
         elif objective == 'relax-learned':
+            elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
+            control_scale = tf.Variable(0., dtype=dtype)
+            control_R = 2
+            control_ranks = tuple(min(K**min(r, N-r), control_R) for r in range(N+1))
+            control_cores = tn.Core(N, K, control_ranks) 
+            control_mps = tn.MPS(N, K, control_ranks, cores=control_cores)
+            control = lambda sample: elbo(sample) + control_scale*control_mps.batch_root(sample)
+            relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
+            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params() + [control_scale] + control_cores.params(), weight=q[config].nu)
+            var_reset += [tf.assign(control_scale, 0.), tf.initialize_variables(control_cores.params())]
+        elif objective == 'relax-marginal-learned':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True)
             control_scale = tf.Variable(0., dtype=dtype)
             control_R = 2
@@ -290,6 +301,7 @@ with tf.name_scope("model"):
                 for it in tqdm.trange(varrelaxsteps):
                     sess.run(all_steps)
                     for config in all_config:
+                        objective = config[-1]
                         configc = config + (checkin, )
                         try:
                             vartrace[configc]['temp'] += [sess.run(q[config].temperatures)[0]]
