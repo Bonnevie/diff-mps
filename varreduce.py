@@ -77,7 +77,7 @@ else:
     mask = np.triu(mask, 1)
     mask = tf.convert_to_tensor(mask.astype(dtype))
 
-concentration = 1.25
+concentration = 1.
 a = 1. + (concentration-1.)*np.eye(K)
 b = concentration - (concentration-1.)*np.eye(K) 
 
