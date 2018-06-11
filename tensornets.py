@@ -161,7 +161,6 @@ def inner_contraction(density, core, weights = None, opt_einsum=False):
         else:
             return tf.einsum('krs,su,kut', tf.transpose(core, [0,2,1]), density, core)
 
-
 @tffunc(2)
 def batch_inner_contraction(density, core, weights = None, opt_einsum=False):
     '''compute Sum_k w_k*A_k^T*L*A_k'''

@@ -28,14 +28,19 @@ class KLcorrectedBound:
     single-sample mulitnomial/categorical distributions.
     The true log-joint distribution is assumed to be *linear* in q parameters.
     '''
-    def __init__(self, model, data, params):
+    def __init__(self, model, data, params, batch=True, **kwargs):
         self.model = model
         self.data = data
         self.params = params
         self.Zs = [tf.nn.softmax(param) for param in self.params]
-        self.entropy = [-tf.reduce_sum(Z*tf.log(Z)) for Z in self.Zs]
-        self.bound = model.logp(self.Zs, self.data) + tf.reduce_sum(self.entropy)
-        self.gradients = tf.gradients(self.bound, self.Zs)
+        if batch:
+            self.entropy = [-tf.reduce_sum(Z*tf.log(Z), axis=[1,2]) for Z in self.Zs]
+            self.bound = self.model.batch_logp(self.Zs, self.data, **kwargs) + tf.reduce_sum(self.entropy, axis=0)
+        else:
+            self.entropy = [-tf.reduce_sum(Z*tf.log(Z)) for Z in self.Zs]
+            self.bound = self.model.logp(self.Zs, self.data, **kwargs) + tf.reduce_sum(self.entropy)
+        self.objective = -tf.reduce_mean(self.bound)
+        self.gradients = tf.gradients(self.objective, self.Zs)
 
     def update_op(self):
         '''update using coordinate ascent'''
@@ -43,7 +48,7 @@ class KLcorrectedBound:
 
     def minimize(self):
         '''minimize completely using Scipy BFGS'''
-        opt = tf.contrib.opt.ScipyOptimizerInterface(-self.bound, self.params)
+        opt = tf.contrib.opt.ScipyOptimizerInterface(self.objective, self.params)
         opt.minimize()
 
 class CollapsedMixture:
@@ -127,7 +132,7 @@ class CollapsedStochasticBlock(CollapsedMixture):
     @tfmethod(2)
     def logp(self, Z, X, observed=None):
         #unpack from singleton list
-        if len(Z.shape)>2:
+        if len(Z.shape)==3:
             Z = Z[0]
 
         if observed is None:
@@ -166,6 +171,9 @@ class CollapsedStochasticBlock(CollapsedMixture):
 
     @tfmethod(2)
     def batch_logp(self, Z, X, observed=None):
+        #unpack from singleton list
+        if len(Z.shape)==4:
+            Z = Z[0]
         if observed is None:
             observed = self._defaultobserved
         else:

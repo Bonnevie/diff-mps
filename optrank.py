@@ -14,7 +14,7 @@ import tensornets as tn
 from itertools import product
 
 #FLAGS
-name = 'full' 
+name = 'full-wr1-wbase' 
 version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -25,7 +25,7 @@ copies = 10
 random_restarts = 10
 coretypes = ['canon']#,'perm'] #types of cores to try 
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
-maxranks = [2,4,8,12,16]#,12,15,18]
+maxranks = [1,2,4,8,12,16]#,12,15,18]
 Ns = [4,6,8]#,6,7] #number of vertices in graph
 
 factor_code = ['N','T','R','S']
@@ -121,6 +121,7 @@ with tf.name_scope("model"):
     logptensor = {N:{} for N in Ns}
     logZ = {N:{} for N in Ns}
     ptensor = {N:{} for N in Ns}
+    bounds = {N:{} for N in Ns}
 
     #baseline evaluation
     sess = tf.Session()
@@ -131,7 +132,12 @@ with tf.name_scope("model"):
                 logptensor[N][copy] = p[N].populatetensor(X[N][copy], observed=mask[N])
                 logZ[N][copy] = np.logaddexp.reduce(logptensor[N][copy].ravel())
                 ptensor[N][copy] = np.exp(logptensor[N][copy] - logZ[N][copy])
-                
+                Z = tf.Variable(tf.random_normal((500,N, K), dtype='float64'), dtype='float64')
+                bound = KLcorrectedBound(p[N], X[N][copy], [Z], batch=True, observed=mask[N])
+                sess.run(tf.variables_initializer([Z]))
+                bound.minimize()
+                bounds[N][copy] = sess.run(bound.bound) 
+
                 for rank in tqdm.tqdm(maxranks, total=len(maxranks)):
                     pcore, pmps = tn.full2TT(np.sqrt(ptensor[N][copy]), rank, normalized=True)
                     if Ntest>0:
@@ -170,7 +176,7 @@ with tf.name_scope("model"):
                 df_c['KL'][configc] = kl_c
 
 save_name = folder + config_full_name + '_optrank.pkl'
-supdict = {'name': save_name, 'df_c':df_c, 'df_p':df_p, 'logZ': logZ, 'X':X}
+supdict = {'name': save_name, 'df_c':df_c, 'df_p':df_p, 'logZ': logZ, 'X':X, 'bounds': bounds}
 with open(folder + config_full_name + '_optrank.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
