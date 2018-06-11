@@ -16,10 +16,10 @@ from itertools import product
 
 from AMSGrad.optimizers import AMSGrad as amsgrad
 
-from networkx import karate_club_graph
+from networkx import karate_club_graph, adjacency_matrix
 
 karate = karate_club_graph()
-X = nx.adjacency_matrix(karate).toarray().astype('float64')
+X = adjacency_matrix(karate).toarray().astype('float64')
 N = 3
 X = X[:N,:N]
 
