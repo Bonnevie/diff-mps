@@ -12,9 +12,10 @@ from collapsedclustering import CollapsedStochasticBlock, KLcorrectedBound
 import tensornets as tn
 
 from itertools import product
+from functools import reduce
 
 #FLAGS
-name = 'full-wr1-wbase-corrected' 
+name = 'baseKL' 
 version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -137,7 +138,7 @@ with tf.name_scope("model"):
                 sess.run(tf.variables_initializer([Z]))
                 bound.minimize()
                 Zmf = sess.run(tf.nn.softmax(Z))
-                ptensor_mf = [reduce(np.multiply.outer, vs.T) for vs in Zmf]
+                ptensor_mf = [reduce(np.multiply.outer, vs) for vs in Zmf]
                 KLmf[N][copy] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in ptensor_mf] 
 
                 for rank in tqdm.tqdm(maxranks, total=len(maxranks)):
