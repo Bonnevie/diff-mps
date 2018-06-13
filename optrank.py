@@ -24,6 +24,7 @@ folder = name + 'V{}K{}'.format(version, K)
 #factors variations to run experiments over
 copies = 10
 random_restarts = 10
+nmeanfield = 500
 coretypes = ['canon']#,'perm'] #types of cores to try 
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
 maxranks = [1,2,4,8,12,16]#,12,15,18]
@@ -119,16 +120,12 @@ with tf.name_scope("model"):
         column_names += ['pred_llk']
     index_p = pd.MultiIndex.from_product([maxranks, Ns, range(copies)], names=['rank', 'size', 'copy'])
     df_p = pd.DataFrame(np.zeros((len(maxranks)*len(Ns)*copies,len(column_names))), index=index_p, columns=column_names)
-    index_kl = pd.MultiIndex.from_product([Ns, range(copies)], names=['size', 'copy'])
-    df_kl = pd.DataFrame(np.zeros((len(Ns)*copies,2)), index =index_kl, columns=['KLmf','KLsym'])
+    index_kl = pd.MultiIndex.from_product([Ns, range(copies),range(nmeanfield)], names=['size', 'copy','restart'])
+    df_kl = pd.DataFrame(np.zeros((len(Ns)*copies*nmeanfield,2)), index =index_kl, columns=['KLmf','KLsym'])
     logptensor = {N:{} for N in Ns}
     logZ = {N:{} for N in Ns}
     ptensor = {N:{} for N in Ns}
     
-    
-    KLmf = {N:{} for N in Ns}
-    KLmf = {N:{} for N in Ns}
-
     orders = list(permutations(range(K)))
     norders = len(orders)
     #baseline evaluation
@@ -147,8 +144,8 @@ with tf.name_scope("model"):
                 Zmf = sess.run(tf.nn.softmax(Z))
                 qtensor_mf = [reduce(np.multiply.outer, vs) for vs in Zmf]
                 qtensor_sym = [sum([reduce(np.multiply.outer, vs[:,order]) for order in orders])/norders for vs in Zmf]
-                df_kl['KLmf'][(N, copy)] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in qtensor_mf] 
-                df_kl['KLsym'][(N, copy)] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in qtensor_sym] 
+                df_kl['KLmf'][(N, copy, slice(None))] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in qtensor_mf] 
+                df_kl['KLsym'][(N, copy, slice(None))] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in qtensor_sym] 
 
                 for rank in tqdm.tqdm(maxranks, total=len(maxranks)):
                     pcore, pmps = tn.full2TT(np.sqrt(ptensor[N][copy]), rank, normalized=True)
