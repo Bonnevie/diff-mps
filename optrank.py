@@ -11,11 +11,11 @@ import pandas as pd
 from collapsedclustering import CollapsedStochasticBlock, KLcorrectedBound
 import tensornets as tn
 
-from itertools import product
+from itertools import product, permutations
 from functools import reduce
 
 #FLAGS
-name = 'baseKL' 
+name = 'withsym' 
 version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -119,11 +119,18 @@ with tf.name_scope("model"):
         column_names += ['pred_llk']
     index_p = pd.MultiIndex.from_product([maxranks, Ns, range(copies)], names=['rank', 'size', 'copy'])
     df_p = pd.DataFrame(np.zeros((len(maxranks)*len(Ns)*copies,len(column_names))), index=index_p, columns=column_names)
+    index_kl = pd.MultiIndex.from_product([Ns, range(copies)], names=['size', 'copy'])
+    df_kl = pd.DataFrame(np.zeros((len(Ns)*copies,2)), index =index_kl, columns=['KLmf','KLsym'])
     logptensor = {N:{} for N in Ns}
     logZ = {N:{} for N in Ns}
     ptensor = {N:{} for N in Ns}
+    
+    
+    KLmf = {N:{} for N in Ns}
     KLmf = {N:{} for N in Ns}
 
+    orders = list(permutations(range(K)))
+    norders = len(orders)
     #baseline evaluation
     sess = tf.Session()
     print("Calculating baselines.")
@@ -138,8 +145,10 @@ with tf.name_scope("model"):
                 sess.run(tf.variables_initializer([Z]))
                 bound.minimize()
                 Zmf = sess.run(tf.nn.softmax(Z))
-                ptensor_mf = [reduce(np.multiply.outer, vs) for vs in Zmf]
-                KLmf[N][copy] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in ptensor_mf] 
+                qtensor_mf = [reduce(np.multiply.outer, vs) for vs in Zmf]
+                qtensor_sym = [sum([reduce(np.multiply.outer, vs[:,order]) for order in orders])/norders for vs in Zmf]
+                df_kl['KLmf'][(N, copy)] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in qtensor_mf] 
+                df_kl['KLsym'][(N, copy)] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in qtensor_sym] 
 
                 for rank in tqdm.tqdm(maxranks, total=len(maxranks)):
                     pcore, pmps = tn.full2TT(np.sqrt(ptensor[N][copy]), rank, normalized=True)
@@ -179,7 +188,7 @@ with tf.name_scope("model"):
                 df_c['KL'][configc] = kl_c
 
 save_name = folder + config_full_name + '_optrank.pkl'
-supdict = {'name': save_name, 'df_c':df_c, 'df_p':df_p, 'logZ': logZ, 'X':X, 'KLmf': KLmf}
+supdict = {'name': save_name, 'configs':df_c, 'baselines':df_p, 'logZ': logZ, 'X':X, 'KL': df_kl}
 with open(folder + config_full_name + '_optrank.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 

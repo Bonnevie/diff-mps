@@ -432,26 +432,29 @@ class MPS:
             sequence = zip(self.cores, self.outer_marginal)
 
         for index, (core, marginal) in enumerate(sequence):
-            if self.right_canonical or self.left_canonical:
-                shadowdistribution = tf.trace(
-                    batch_inner_broadcast(shadowcondition, core))
-            else:
-                shadowdistribution = tf.einsum(
-                    'bkij,ji', batch_inner_broadcast(shadowcondition, core),
-                    marginal)
+            with tf.name_scope("conditional_{}".format(index)):
+                if self.right_canonical or self.left_canonical:
+                    shadowdistribution = tf.trace(
+                        batch_inner_broadcast(shadowcondition, core))
+                else:
+                    shadowdistribution = tf.einsum(
+                        'bkij,ji', batch_inner_broadcast(shadowcondition, core),
+                        marginal)
 
-            shadowreparam = CategoricalReparam(
-                tf.log(epsilon+shadowdistribution),
-                temperature=self.temperatures[index])
+            with tf.name_scope("sample_{}".format(index)):
+                shadowreparam = CategoricalReparam(
+                    tf.log(epsilon+shadowdistribution),
+                    temperature=self.temperatures[index])
 
-            shadowsample = shadowreparam.gatedz
-            shadowsamples += [shadowsample]
+                shadowsample = shadowreparam.gatedz
+                shadowsamples += [shadowsample]
 
-            shadowupdate = tf.einsum('kij,bk', core,
-                                     shadowsample)
-            shadowcondition = tf.einsum('bik,bkl,blj->bij',
-                                        tf.transpose(shadowupdate, [0,2,1]),
-                                        shadowcondition, shadowupdate)
+            with tf.name_scope("update_{}".format(index)):
+                shadowupdate = tf.einsum('kij,bk', core,
+                                        shadowsample)
+                shadowcondition = tf.einsum('bik,bkl,blj->bij',
+                                            tf.transpose(shadowupdate, [0,2,1]),
+                                            shadowcondition, shadowupdate)
         if self.left_canonical:
             shadowsamples = shadowsamples[-1::-1]
         shadowb = tf.transpose(tf.stack(shadowsamples), [1,0,2])
@@ -469,25 +472,27 @@ class MPS:
             sequence = zip(self.cores, self.outer_marginal)
 
         for index, (core, marginal) in enumerate(sequence):
-            if self.right_canonical or self.left_canonical:
-                distribution = tf.trace(
-                    batch_inner_broadcast(condition, core))
-            else:
-                distribution = tf.einsum(
-                    'bkij,ji', batch_inner_broadcast(condition, core),
-                    marginal)
+            with tf.name_scope("conditional_{}".format(index)):
+                if self.right_canonical or self.left_canonical:
+                    distribution = tf.trace(
+                        batch_inner_broadcast(condition, core))
+                else:
+                    distribution = tf.einsum(
+                        'bkij,ji', batch_inner_broadcast(condition, core),
+                        marginal)
 
-            reparam = CategoricalReparam(
-                tf.log(epsilon+distribution),
-                temperature=self.temperatures[index], coupled=coupled)
+            with tf.name_scope("sample_{}".format(index)):
+                reparam = CategoricalReparam(
+                    tf.log(epsilon+distribution),
+                    temperature=self.temperatures[index], coupled=coupled)
 
-            samplers += [reparam]
-
-            update = tf.einsum('kij,bk', core,
-                                     reparam.b)
-            condition = tf.einsum('bik,bkl,blj->bij',
-                                        tf.transpose(update, [0,2,1]),
-                                        condition, update)
+                samplers += [reparam]
+            with tf.name_scope("update_{}".format(index)):
+                update = tf.einsum('kij,bk', core,
+                                        reparam.b)
+                condition = tf.einsum('bik,bkl,blj->bij',
+                                            tf.transpose(update, [0,2,1]),
+                                            condition, update)
         if self.left_canonical:
             return samplers[-1::-1]
         else:
@@ -506,27 +511,29 @@ class MPS:
             sequence = zip(self.cores, self.outer_marginal, samplers)
 
         for index, (core, marginal, sampler) in enumerate(sequence):
-            if self.right_canonical or self.left_canonical:
-                distribution = tf.trace(
-                    batch_inner_broadcast(condition, core))
-            else:
-                distribution = tf.einsum(
-                    'bkij,ji', batch_inner_broadcast(condition, core),
-                    marginal)
+            with tf.name_scope("conditional_{}".format(index)):
+                if self.right_canonical or self.left_canonical:
+                    distribution = tf.trace(
+                        batch_inner_broadcast(condition, core))
+                else:
+                    distribution = tf.einsum(
+                        'bkij,ji', batch_inner_broadcast(condition, core),
+                        marginal)
+            with tf.name_scope("sample_{}".format(index)):
+                reparam = CategoricalReparam(
+                    tf.log(epsilon+distribution),
+                    noise=sampler.u, cond_noise=sampler.v,
+                    temperature=self.temperatures[index])
 
-            reparam = CategoricalReparam(
-                tf.log(epsilon+distribution),
-                noise=sampler.u, cond_noise=sampler.v,
-                temperature=self.temperatures[index])
+                shadowsamplers += [reparam]
 
-            shadowsamplers += [reparam]
-
-            #shadowsampler difference
-            update = tf.einsum('kij,bk', core,
-                                     reparam.gatedz)
-            condition = tf.einsum('bik,bkl,blj->bij',
-                                        tf.transpose(update, [0,2,1]),
-                                        condition, update)
+            with tf.name_scope("update_{}".format(index)):
+                #shadowsampler difference
+                update = tf.einsum('kij,bk', core,
+                                        reparam.gatedz)
+                condition = tf.einsum('bik,bkl,blj->bij',
+                                            tf.transpose(update, [0,2,1]),
+                                            condition, update)
         if self.left_canonical:
             return shadowsamplers[-1::-1]
         else:
@@ -553,24 +560,27 @@ class MPS:
             sequence = zip(self.cores, self.outer_marginal, samplers, shadowsamplers)
 
         for index, (core, marginal, sampler, shadowsampler) in enumerate(sequence):
-            if self.right_canonical or self.left_canonical:
-                distribution = tf.trace(
-                    batch_inner_broadcast(condition, core))
-            else:
-                distribution = tf.einsum(
-                    'bkij,ji', batch_inner_broadcast(condition, core),
-                    marginal)
+            with tf.name_scope('conditional_{}'.format(index)):
+                if self.right_canonical or self.left_canonical:
+                    distribution = tf.trace(
+                        batch_inner_broadcast(condition, core))
+                else:
+                    distribution = tf.einsum(
+                        'bkij,ji', batch_inner_broadcast(condition, core),
+                        marginal)
 
-            conditionalzb = shadowsampler.softgate(tf.log(epsilon+distribution) + sampler.zb - sampler.param, shadowsampler.temperature)
+            with tf.name_scope('sample_{}'.format(index)):
+                conditionalzb = shadowsampler.softgate(tf.log(epsilon+distribution) + sampler.zb - sampler.param, shadowsampler.temperature)
             
-            bsamples += [sampler.b]
-            zsamples += [shadowsampler.gatedz]
-            zbsamples += [conditionalzb]
-            
-            update = tf.einsum('kij,bk', core, conditionalzb)
-            condition = tf.einsum('bik,bkl,blj->bij',
-                                        tf.transpose(update, [0,2,1]),
-                                        condition, update)
+                bsamples += [sampler.b]
+                zsamples += [shadowsampler.gatedz]
+                zbsamples += [conditionalzb]
+                
+            with tf.name_scope('update_{}'.format(index)):
+                update = tf.einsum('kij,bk', core, conditionalzb)
+                condition = tf.einsum('bik,bkl,blj->bij',
+                                            tf.transpose(update, [0,2,1]),
+                                            condition, update)
         
         #flip back
         if self.left_canonical:
@@ -855,6 +865,7 @@ class MPS:
         Z = tf.square(tf.reshape(Z, [self.K,]*self.N))
         return tf.real(Z)
 
+    @tfmethod(0)
     def _scale(self):
             return tf.identity(self.contraction(tf.ones((self.N, self.K),
                                                         dtype=dtype),

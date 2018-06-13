@@ -207,7 +207,7 @@ with tf.name_scope("model"):
             control_R = 2
             control_ranks = tuple(min(K**min(r, N-r), control_R) for r in range(N+1))
             control_cores = tn.Core(N, K, control_ranks) 
-            control_mps = tn.MPS(N, K, control_ranks, cores=control_cores)
+            control_mps = tn.MPS(N, K, control_ranks, cores=control_cores, normalized=False)
             control = lambda sample: elbo(sample) + control_scale*control_mps.batch_root(sample)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
             grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params() + [control_scale] + control_cores.params(), weight=q[config].nu)
@@ -218,7 +218,7 @@ with tf.name_scope("model"):
             control_R = 2
             control_ranks = tuple(min(K**min(r, N-r), control_R) for r in range(N+1))
             control_cores = tn.Core(N, K, control_ranks) 
-            control_mps = tn.MPS(N, K, control_ranks, cores=control_cores)
+            control_mps = tn.MPS(N, K, control_ranks, cores=control_cores, normalized=False)
             control = lambda sample: elbo(sample) + control_scale*control_mps.batch_root(sample)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
             grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params() + [control_scale] + control_cores.params(), weight=q[config].nu)

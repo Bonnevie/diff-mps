@@ -73,7 +73,8 @@ class CollapsedMixture:
 
     @tfmethod(1)
     def populatetensor(self, X, observed=None, sess=None):
-        sess = tf.get_default_session()
+        if sess is None:
+            sess = tf.get_default_session()
         if observed is None:
             observed = self._defaultobserved
         shape = self.N*(self.K,)
