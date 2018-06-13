@@ -24,14 +24,14 @@ N = 3
 X = X[:N,:N]
 
 #FLAGS
-name = 'allinclusive-corrected' 
-version = 2
+name = 'multistart' 
+version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
 folder = name + 'V{}K{}'.format(version, K)
 
 #factors variations to run experiments over
-random_restarts = 1
+random_restarts = 3
 varrelaxsteps = 40000
 ngsamples = 20000
 
@@ -195,6 +195,7 @@ with tf.name_scope("model"):
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=q[config].nu)
             var_grad = None
+            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
         elif objective == 'relax-marginal-varreduce':
             cvweight[config] = tf.Variable(1., dtype=dtype)
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True, cvweight=cvweight[config])
@@ -211,7 +212,7 @@ with tf.name_scope("model"):
             control = lambda sample: elbo(sample) + control_scale*control_mps.batch_root(sample)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
             grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params() + [control_scale] + control_cores.params(), weight=q[config].nu)
-            var_reset += [tf.assign(control_scale, 0.), tf.initialize_variables(control_cores.params())]
+            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1), tf.assign(control_scale, 0.), tf.initialize_variables(control_cores.params())]
         elif objective == 'relax-marginal-learned':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True)
             control_scale = tf.Variable(0., dtype=dtype)
@@ -222,7 +223,7 @@ with tf.name_scope("model"):
             control = lambda sample: elbo(sample) + control_scale*control_mps.batch_root(sample)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
             grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params() + [control_scale] + control_cores.params(), weight=q[config].nu)
-            var_reset += [tf.assign(control_scale, 0.), tf.initialize_variables(control_cores.params())]
+            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1), tf.assign(control_scale, 0.), tf.initialize_variables(control_cores.params())]
         else:
             raise(ValueError)
 
@@ -307,7 +308,7 @@ with tf.name_scope("model"):
                             vartrace[configc]['temp'] += [sess.run(q[config].temperatures)[0]]
                             vartrace[configc]['nu'] += [sess.run(q[config].nu)]
                             if objective == 'relax-marginal-varreduce':
-                                vartrace[configc]['cvweight'] += [sess.run(cvweight)]
+                                vartrace[configc]['cvweight'] += [sess.run(cvweight[config])]
                         except KeyError: 
                             vartrace[configc] = {}
                             vartrace[configc]['temp'] = [sess.run(q[config].temperatures)[0]]

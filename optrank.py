@@ -144,8 +144,8 @@ with tf.name_scope("model"):
                 Zmf = sess.run(tf.nn.softmax(Z))
                 qtensor_mf = [reduce(np.multiply.outer, vs) for vs in Zmf]
                 qtensor_sym = [sum([reduce(np.multiply.outer, vs[:,order]) for order in orders])/norders for vs in Zmf]
-                df_kl['KLmf'][(N, copy, slice(None))] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in qtensor_mf] 
-                df_kl['KLsym'][(N, copy, slice(None))] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in qtensor_sym] 
+                df_kl.loc[(N, copy, slice(None)), 'KLmf'] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in qtensor_mf] 
+                df_kl.loc[(N, copy, slice(None)), 'KLsym'] = [np.sum(q*(np.log(q)-np.log(ptensor[N][copy]))) for q in qtensor_sym] 
 
                 for rank in tqdm.tqdm(maxranks, total=len(maxranks)):
                     pcore, pmps = tn.full2TT(np.sqrt(ptensor[N][copy]), rank, normalized=True)
