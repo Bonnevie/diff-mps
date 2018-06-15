@@ -163,7 +163,7 @@ with tf.name_scope("model"):
         if train_temp:
             var_params = q[config].var_params()
         else:
-            var_params = [q._nuvar]
+            var_params = [q[config]._nuvar]
 
         control_samples = q[config].shadowrelax(nsample)
         
@@ -294,7 +294,7 @@ with tf.name_scope("model"):
     with sess.as_default():
         with tf.name_scope("optimization"):    
             checkpoint("initial")
-            for stage in flow_stages:
+            for stage in range(flow_stages):
                 for bopt in baseopt_flat:
                     bopt(10).minimize()
                 checkpoint("flow{}".format(stage))
