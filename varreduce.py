@@ -20,11 +20,11 @@ from networkx import karate_club_graph, adjacency_matrix
 
 karate = karate_club_graph()
 X = adjacency_matrix(karate).toarray().astype('float64')
-N = 3
+N = 6
 X = X[:N,:N]
 
 #FLAGS
-name = 'notemp' 
+name = 'largegraph' 
 version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -39,7 +39,7 @@ rate = 1e-1#[1e-1,1e-2,1e-3]
 decay = 0.1
 decay_steps = varrelaxsteps/2.
 optimizer = 'ams' #options: ams
-nsample = 100
+nsample = 500
 coretype = 'canon'
 train_temp = False
 flow_stages = 2
@@ -56,7 +56,7 @@ short_key = False
 active_factors = [len(factor)>1 for factor in factors]
 all_config = list(product(*factors))
 config_count = np.prod([len(factor) for factor in factors])
-config_full_name = ''.join([code + '-'.join([str(fact) for fact in factor]) for code, factor in zip(factor_code, factors)])
+config_full_name = ''.join([code + '-'.join([str(fact) for fact in (factor if len(factor)<4 else [len(factor)])]) for code, factor in zip(factor_code, factors)])
 copy_writer = []
         
 np.random.seed(1)
@@ -317,6 +317,8 @@ with tf.name_scope("model"):
                             vartrace[configc]['nu'] += [sess.run(q[config].nu)]
                             if objective == 'relax-marginal-varreduce':
                                 vartrace[configc]['cvweight'] += [sess.run(cvweight[config])]
+                            if objective == 'relax-learned':
+                                vartrade[configc]['']
                         except KeyError: 
                             vartrace[configc] = {}
                             vartrace[configc]['temp'] = [sess.run(q[config].temperatures)[0]]
