@@ -36,7 +36,7 @@ varrelaxsteps = 40000
 ngsamples = 20000
 
 rate = 1e-1#[1e-1,1e-2,1e-3]
-decay = 0.1
+decay = 1.
 decay_steps = varrelaxsteps/2.
 optimizer = 'ams' #options: ams
 nsample = 500
@@ -102,6 +102,7 @@ trueloss = {}
 truegrad = {}
 flatgrad = {}
 cvweight = {}
+control_scale = {}
 
 decay_stage = tf.Variable(1, name='decay_stage', trainable=False, dtype=tf.int32)
 increment_decay_stage_op = tf.assign(decay_stage, decay_stage+1)
@@ -155,7 +156,7 @@ with tf.name_scope("model"):
         if decay < 1.:
             learningrate = tf.train.exponential_decay(tfrate, decay_stage, decay_steps, decay)
         else:
-            learningrate = tfrate
+            learningrate = tfrate/tf.sqrt(tf.cast(decay_stage, 'float64'))
         
         if optimizer == 'ams':
             stepper = amsgrad(learning_rate=learningrate, beta1=beta1, beta2=beta2, epsilon=epsilon)
@@ -211,26 +212,27 @@ with tf.name_scope("model"):
             var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1), tf.assign(cvweight[config], 1.)]
         elif objective == 'relax-learned':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
-            control_scale = tf.Variable(0., dtype=dtype)
+            control_scale[config] = tf.Variable(0., dtype=dtype)
             control_R = 2
             control_ranks = tuple(min(K**min(r, N-r), control_R) for r in range(N+1))
             control_cores = tn.Core(N, K, control_ranks) 
             control_mps = tn.MPS(N, K, control_ranks, cores=control_cores, normalized=False)
-            control = lambda sample: elbo(sample) + control_scale*control_mps.batch_root(sample)
+            control = lambda sample: elbo(sample) + control_scale[config]*control_mps.batch_root(sample)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
-            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params + [control_scale] + control_cores.params(), weight=q[config].nu)
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1), tf.assign(control_scale, 0.), tf.initialize_variables(control_cores.params())]
+            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params + [control_scale[config]] + control_cores.params(), weight=q[config].nu)
+            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1), tf.assign(control_scale[config], 0.), tf.initialize_variables(control_cores.params())]
         elif objective == 'relax-marginal-learned':
-            elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True)
-            control_scale = tf.Variable(0., dtype=dtype)
+            control_scale[config] = tf.Variable(0., dtype=dtype)
+            cvweight[config] = tf.Variable(1., dtype=dtype)
+            elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True, cvweight=cvweight[config])
             control_R = 2
             control_ranks = tuple(min(K**min(r, N-r), control_R) for r in range(N+1))
             control_cores = tn.Core(N, K, control_ranks) 
             control_mps = tn.MPS(N, K, control_ranks, cores=control_cores, normalized=False)
-            control = lambda sample: elbo(sample) + control_scale*control_mps.batch_root(sample)
+            control = lambda sample: elbo(sample) + control_scale[config]*control_mps.batch_root(sample)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
-            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params + [control_scale] + control_cores.params(), weight=q[config].nu)
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1), tf.assign(control_scale, 0.), tf.initialize_variables(control_cores.params())]
+            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params + [control_scale[config], cvweight[config]] + control_cores.params(), weight=q[config].nu)
+            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1), tf.assign(control_scale[config], 0.), tf.initialize_variables(control_cores.params())]
         else:
             raise(ValueError)
 
@@ -318,7 +320,7 @@ with tf.name_scope("model"):
                             if objective == 'relax-marginal-varreduce':
                                 vartrace[configc]['cvweight'] += [sess.run(cvweight[config])]
                             if objective == 'relax-learned':
-                                vartrade[configc]['']
+                                vartrace[configc]['control_scale'] = [sess.run(control_scale[config])]
                         except KeyError: 
                             vartrace[configc] = {}
                             vartrace[configc]['temp'] = [sess.run(q[config].temperatures)[0]]

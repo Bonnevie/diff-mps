@@ -36,7 +36,7 @@ random_restarts = 2
 nsteps = 10000
 
 rate = 1e-1#[1e-1,1e-2,1e-3]
-decay = 0.1
+decay = 1.
 decay_steps = nsteps/2.
 optimizer = 'ams' #options: ams
 nsample = 1000
