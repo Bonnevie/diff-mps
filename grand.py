@@ -86,7 +86,7 @@ b = concentration - (concentration-1.)*np.eye(K)
 
 p = CollapsedStochasticBlock(N, K, alpha=1, a=a, b=b)
 logp = lambda sample: p.batch_logp(sample, X, observed=mask)
-predlogp = lambda sample: p.batch_logp(sample, X, observed=predictionmask)
+predlogp = lambda sample: p.batch_logpred(sample, X, observed=predictionmask)
 beta1=tf.Variable(0.9,dtype='float64')
 beta2=tf.Variable(0.999,dtype='float64')
 epsilon=tf.Variable(0.999,dtype='float64')
@@ -104,6 +104,7 @@ qtensor = {}
 update = {}
 init_opt = {}
 predloss = {}
+configok = {}
 decay_stage = tf.Variable(1, name='decay_stage', trainable=False, dtype=tf.int32)
 increment_decay_stage_op = tf.assign(decay_stage, decay_stage+1)
 
@@ -127,114 +128,115 @@ with tf.name_scope("model"):
     print("building models...")
     for config in tqdm.tqdm(all_config, total=config_count):
         R, restart_ind, objective, marginal, unimix, coretype, init = config
-        if short_key:
-            config_name = ''.join([''.join([key, str(value)]) for key, value, active in zip(factor_code, config, active_factors) if active])
-        else:
-            config_name = ''.join([''.join([key, str(value)]) for key, value in zip(factor_code, config)])
+        configok[config] = True
+        if coretype == 'perm' and R == 1:
+            configok[config] = False
+        if configok[config]:
+            if short_key:
+                config_name = ''.join([''.join([key, str(value)]) for key, value, active in zip(factor_code, config, active_factors) if active])
+            else:
+                config_name = ''.join([''.join([key, str(value)]) for key, value in zip(factor_code, config)])
+                    
+            with tf.name_scope(config_name):
+                Xt[config] = tf.placeholder(dtype, shape=(N, N))
                 
-        with tf.name_scope(config_name):
-            Xt[config] = tf.placeholder(dtype, shape=(N, N))
+                #set coretype
+                if coretype == 'canon':
+                    ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
+                    cores[config] = tn.Canonical(N, K, ranks, orthogonalstyle=tn.CayleyOrthogonal)
+                elif coretype == 'perm':
+                    ranks = (1,)+tuple(min((2)**min(r, N-r-2)*K, R) for r in range(N-1))+(1,)
+                    cores[config] = tn.CanonicalPermutationCore(N, K, ranks)
+                elif coretype == 'standard':
+                    ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
+                    cores[config] = tn.Core(N, K, ranks)
+                else:
+                    raise(ValueError)
+
+                coregroup[restart_ind] += [cores[config]]
+
+                #build q model
+                if unimix:
+                    q[config] = tn.MPS(N, K, ranks, cores=cores[config])
+                else:
+                    q[config] = tn.unimix(N, K, ranks, cores=cores[config])
+
             
-            #set coretype
-            if coretype == 'canon':
-                ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
-                cores[config] = tn.Canonical(N, K, ranks, orthogonalstyle=tn.CayleyOrthogonal)
-            elif coretype == 'perm':
-                ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
-                repranks = (1,)+tuple(min((2)**min(r, N-r-2)*K, R) for r in range(N-1))+(1,)
-                cores[config] = tn.CanonicalPermutationCore(N, K, ranks)
-            elif coretype == 'standard':
-                ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
-                cores[config] = tn.Core(N, K, ranks)
+            tfrate = tf.convert_to_tensor(rate, dtype=dtype)
+            if decay < 1.:
+                learningrate = tf.train.exponential_decay(tfrate, decay_stage, decay_steps, decay)
+            else:
+                learningrate = tfrate
+            
+            if optimizer == 'ams':
+                stepper = amsgrad(learning_rate=learningrate, beta1=beta1, beta2=beta2, epsilon=epsilon)
+                var_stepper = amsgrad(learning_rate=learningrate, beta1=beta1, beta2=beta2, epsilon=epsilon)
+            control_samples = q[config].shadowrelax(nsample)
+            
+            elbo = lambda sample: -q[config].elbo(sample, logp, marginal=marginal)
+            loss[config] = tf.reduce_mean(elbo(control_samples[0]))
+            predloss[config] = tf.reduce_mean(predlogp(control_samples[0]))
+            dloss = tf.reduce_mean(elbo(control_samples[1]))
+
+            if objective == 'shadow':
+                grad = stepper.compute_gradients(dloss, var_list=cores[config].params())
+                var_grad = None
+                var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.5)]
+            elif objective == 'shadow-tight':
+                grad = stepper.compute_gradients(dloss, var_list=cores[config].params())
+                var_grad = None
+                var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+            elif objective == 'relax':
+                relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
+                grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=q[config].nu)
+                var_grad = None
+                var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+            elif objective == 'score':
+                relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
+                grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=0.)
+                var_grad = None
+                var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+            elif objective == 'relax-varreduce':
+                relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
+                grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params(), weight=q[config].nu)
+                var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+            elif objective == 'relax-learned':
+                control_scale = tf.Variable(0., dtype=dtype)
+                control_R = 2
+                control_ranks = tuple(min(K**min(r, N-r), control_R) for r in range(N+1))
+                control_cores = tn.Core(N, K, control_ranks) 
+                control_mps = tn.MPS(N, K, control_ranks, cores=control_cores, normalized=False)
+                control = lambda sample: elbo(sample) + control_scale*control_mps.batch_root(sample)
+                relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
+                grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params() + [control_scale] + control_cores.params(), weight=q[config].nu)
+                var_reset += [tf.assign(control_scale, 0.), tf.initialize_variables(control_cores.params())]
             else:
                 raise(ValueError)
 
-            coregroup[restart_ind] += [cores[config]]
+            if init is 'random':
+                mode_loss = tf.convert_to_tensor(np.array(0.).astype('float64'))
+            elif init is 'rank1':
+                mode_loss = tf.reduce_sum(tn.norm_rank1(q[config], tf.nn.softmax(Z)))
+            elif init is 'entropy':
+                mode_loss = -(q[config].marginalentropy())
+            elif init is 'expectation':
+                mode_loss = -tf.reduce_sum(tf.log(q[config].batch_contraction(tf.nn.softmax(Z))))
 
-            #build q model
-            if unimix:
-                q[config] = tn.MPS(N, K, ranks, cores=cores[config])
+            init_opt[config] = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=cores[config].params(),method='CG')
+                    
+            
+            #step[config] = stepper.apply_gradients(var_grad)
+            #residual[config] = tf.linalg.norm(grad-truegrad[config])
+            #variance[config] =  
+            #bias[config] = residual[config] - variance[config]
+            if var_grad is not None:
+                var_step[config] = var_stepper.apply_gradients(var_grad)
             else:
-                q[config] = tn.unimix(N, K, ranks, cores=cores[config])
+                var_step[config] = tf.no_op()
 
-        
-        tfrate = tf.convert_to_tensor(rate, dtype=dtype)
-        if decay < 1.:
-            learningrate = tf.train.exponential_decay(tfrate, decay_stage, decay_steps, decay)
-        else:
-            learningrate = tfrate
-        
-        if optimizer == 'ams':
-            stepper = amsgrad(learning_rate=learningrate, beta1=beta1, beta2=beta2, epsilon=epsilon)
-            var_stepper = amsgrad(learning_rate=learningrate, beta1=beta1, beta2=beta2, epsilon=epsilon)
-        control_samples = q[config].shadowrelax(nsample)
-        
-        elbo = lambda sample: -q[config].elbo(sample, logp, marginal=marginal)
-        loss[config] = tf.reduce_mean(elbo(control_samples[0]))
-        predloss[config] = tf.reduce_mean(predlogp(control_samples[0]))
-        dloss = tf.reduce_mean(elbo(control_samples[1]))
+            step[config] = stepper.apply_gradients(grad)
 
-        if objective == 'shadow':
-            grad = stepper.compute_gradients(dloss, var_list=cores[config].params())
-            var_grad = None
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.5)]
-        elif objective == 'shadow-tight':
-            grad = stepper.compute_gradients(dloss, var_list=cores[config].params())
-            var_grad = None
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
-        elif objective == 'relax':
-            relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
-            grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=q[config].nu)
-            var_grad = None
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
-        elif objective == 'score':
-            relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
-            grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=0.)
-            var_grad = None
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
-        elif objective == 'relax-varreduce':
-            relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
-            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params(), weight=q[config].nu)
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
-        elif objective == 'relax-learned':
-            control_scale = tf.Variable(0., dtype=dtype)
-            control_R = 2
-            control_ranks = tuple(min(K**min(r, N-r), control_R) for r in range(N+1))
-            control_cores = tn.Core(N, K, control_ranks) 
-            control_mps = tn.MPS(N, K, control_ranks, cores=control_cores, normalized=False)
-            control = lambda sample: elbo(sample) + control_scale*control_mps.batch_root(sample)
-            relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
-            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=q[config].var_params() + [control_scale] + control_cores.params(), weight=q[config].nu)
-            var_reset += [tf.assign(control_scale, 0.), tf.initialize_variables(control_cores.params())]
-        else:
-            raise(ValueError)
-
-        if init is 'random':
-            mode_loss = tf.convert_to_tensor(np.array(0.).astype('float64'))
-        elif init is 'rank1':
-            mode_loss = tf.reduce_sum(tn.norm_rank1(q[config], tf.nn.softmax(Z)))
-        elif init is 'entropy':
-            mode_loss = -(q[config].marginalentropy())
-        elif init is 'expectation':
-            mode_loss = -tf.reduce_sum(tf.log(q[config].batch_contraction(tf.nn.softmax(Z))))
-
-        init_opt[config] = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=cores[config].params(),method='CG')
-                
-        
-        #step[config] = stepper.apply_gradients(var_grad)
-        #residual[config] = tf.linalg.norm(grad-truegrad[config])
-        #variance[config] =  
-        #bias[config] = residual[config] - variance[config]
-        if var_grad is not None:
-            var_step[config] = var_stepper.apply_gradients(var_grad)
-        else:
-            var_step[config] = tf.no_op()
-
-        step[config] = stepper.apply_gradients(grad)
-
-        update[config] = tf.group([step[config], var_step[config]])
-
-        
+            update[config] = tf.group([step[config], var_step[config]])
     
     var_reset += [tf.assign(decay_stage, 0)]
     var_reset = tf.group(var_reset)
@@ -268,24 +270,26 @@ with tf.name_scope("model"):
         checkpoint("initial")
         with tf.name_scope("optimization"):    
             for config in all_config:
-                configc = config + (0,)
-                init_opt[config].minimize()
-                lossit, predlossit = sess.run([loss[config], predloss[config]])
-                df_c.loc[configc, 'loss'] = lossit
-                df_c.loc[configc, 'predloss'] = predlossit    
+                if configok[config]:
+                    configc = config + (0,)
+                    init_opt[config].minimize()
+                    lossit, predlossit = sess.run([loss[config], predloss[config]])
+                    df_c.loc[configc, 'loss'] = lossit
+                    df_c.loc[configc, 'predloss'] = predlossit    
             for it in tqdm.trange(1,nsteps):
                 for config in all_config:
-                    configc = config + (it,)
-                    if timeit:
-                        run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-                        run_metadata = tf.RunMetadata()
-                        _, lossit = sess.run([update[config], loss[config]],
-                                                                             options=run_options, run_metadata=run_metadata)
-                        train_writer.add_run_metadata(run_metadata, 'step {}, obj {}'.format(it, config[-1]))
-                    else:
-                        _, lossit, predlossit = sess.run([update[config], loss[config], predloss[config]])
-                    df_c.loc[configc, 'loss'] = lossit
-                    df_c.loc[configc, 'predloss'] = predlossit
+                    if configok[config]:
+                        configc = config + (it,)
+                        if timeit:
+                            run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                            run_metadata = tf.RunMetadata()
+                            _, lossit = sess.run([update[config], loss[config]],
+                                                                                options=run_options, run_metadata=run_metadata)
+                            train_writer.add_run_metadata(run_metadata, 'step {}, obj {}'.format(it, config[-1]))
+                        else:
+                            _, lossit, predlossit = sess.run([update[config], loss[config], predloss[config]])
+                        df_c.loc[configc, 'loss'] = lossit
+                        df_c.loc[configc, 'predloss'] = predlossit
                 sess.run(increment_decay_stage_op)
                 #residualnorm = np.square(np.linalg.norm(residuals, ord=2, axis=1)).mean()
                     #variance = (1./(ngsamples-1))*np.square(np.linalg.norm(deviations, ord=2, axis=1)).sum()
