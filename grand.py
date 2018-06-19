@@ -142,7 +142,7 @@ with tf.name_scope("model"):
             elif coretype == 'perm':
                 ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
                 repranks = (1,)+tuple(min((2)**min(r, N-r-2)*K, R) for r in range(N-1))+(1,)
-                cores[config] = tn.PermutationCore_augmented(N, K, repranks, ranks)
+                cores[config] = tn.CanonicalPermutationCore(N, K, ranks)
             elif coretype == 'standard':
                 ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
                 cores[config] = tn.Core(N, K, ranks)
