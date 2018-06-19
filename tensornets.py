@@ -897,21 +897,33 @@ class unimix(MPS):
         return vec_scalar_logsumexp(self.logalpha + super().batch_logp(Z), 
                                     self.log1malpha + self.log_uniform)
     @tfmethod(1)
-    def elbo(self, samples, f, fold=False):
+    def elbo(self, samples, f, fold=False, marginal=False, cvweight=1.):
         '''calculate ELBO or another entropy-weighted expectation using nsamples MC samples'''
         gumbels = -tf.log(-tf.log(tf.random_uniform(samples.shape)))
         usamples = tf.one_hot(tf.argmax(gumbels, axis=-1), self.K, dtype=dtype)
         if fold:
             llk = tf.map_fn(f, samples)
-            ullk = tf.map_fn(f, usamples)
-        
+            ullk = tf.map_fn(f, usamples)     
         else:
             llk = f(samples)
             ullk = f(usamples)
+
+        if marginal:
+            marginals = self.marginals()
+            marginalentropy = -tf.reduce_sum(marginals * tf.log(epsilon+marginals))
+            marginalcv = (marginalentropy +
+                          tf.reduce_sum(samples *
+                                        tf.log(epsilon+marginals)[None, :, :],
+                                        axis=[1, 2]))
+        else:
+            marginalcv = 0.
             
         entropy = -self.batch_logp(samples)
         uentropy = -self.batch_logp(usamples)
-        return tf.exp(self.logalpha)*(llk + entropy) + tf.exp(self.log1malpha)*(ullk + uentropy)
+        return tf.exp(self.logalpha)*(llk + entropy) + tf.exp(self.log1malpha)*(ullk + uentropy) + cvweight*marginalcv
+
+    def marginals(self):
+        return tf.exp(self.logalpha)*super().marginals() + tf.exp(self.log1malpha)/self.K
 
     @tfmethod(0)
     def populatetensor(self):
@@ -924,6 +936,8 @@ class unimix(MPS):
     def set_alpha_op(self, alpha):
         logalpha_hat = tf.log(alpha)
         return tf.assign(self.logalpha_var, tf.log(tf.exp(-logalpha_hat)-1.))
+
+    
 
 class unimixIS(unimix):
     def batch_logp(self, Z):
