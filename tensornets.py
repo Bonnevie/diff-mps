@@ -1330,6 +1330,7 @@ class CanonicalPermutationCore(Core):
         self.ranks = ranks
         self.left_canonical = True
         self.right_canonical = False
+        self.orthogonalstyle = orthogonalstyle
         assert(np.all([np.logical_not(np.mod(rank, self.K)) or rank==1 for rank in self.ranks]))
         self.rep = [np.eye(self.K, dtype=dtype)[np.roll(np.arange(self.K),k)] for k in range(self.K)]
         self.V = np.column_stack([np.eye(self.K, dtype=dtype)[0], np.ones(self.K, dtype=dtype)/np.sqrt(self.K)])
@@ -1377,6 +1378,7 @@ class CanonicalPermutationCore2(Core):
         self.ranks = ranks
         self.left_canonical = True
         self.right_canonical = False
+        self.orthogonalstyle = orthogonalstyle
         assert(np.all([np.logical_not(np.mod(rank, self.K)) or rank==1 for rank in self.ranks]))
         self.rep = [np.eye(self.K, dtype=dtype)[np.roll(np.arange(self.K),k)] for k in range(self.K)]
         self.V = np.column_stack([np.eye(self.K, dtype=dtype)[0], np.ones(self.K, dtype=dtype)/np.sqrt(self.K)])

@@ -21,7 +21,7 @@ from networkx import karate_club_graph, adjacency_matrix
 
 karate = karate_club_graph()
 X = adjacency_matrix(karate).toarray().astype('float64')
-N = 34
+N = 2
 X = X[:N,:N]
 
 #FLAGS
@@ -39,7 +39,7 @@ rate = 1e-1#[1e-1,1e-2,1e-3]
 decay = 1.
 decay_steps = nsteps/2.
 optimizer = 'ams' #options: ams
-nsample = 100
+nsample = 500
 marginal = False
 timeit = False
 
@@ -123,7 +123,7 @@ def buildq(config, logp, predlogp, decay_stage):
                 return (False,) + 7 * (None,)
             #ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
             ranks = (1,)+tuple(min((2)**min(r, N-r-2)*K, R) for r in range(N-1))+(1,)
-            cores = tn.CanonicalPermutationCore(N, K, ranks)
+            cores = tn.CanonicalPermutationCore2(N, K, ranks)
         elif coretype == 'standard':
             ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
             cores = tn.Core(N, K, ranks)
@@ -244,6 +244,8 @@ df_c = pd.DataFrame(np.zeros((config_count*nsteps,len(column_names))), index=ind
 
 #train_writer = tf.summary.FileWriter('./train', sess.graph)
 
+qdict = {}
+
 for config in all_config:
     tf.reset_default_graph()
     with tf.Session() as sess:        
@@ -271,11 +273,10 @@ for config in all_config:
                 df_c.loc[configc, 'loss'] = lossit
                 df_c.loc[configc, 'predloss'] = predlossit
                 sess.run(increment_decay_stage_op)
-                
+            qdict[config] = tn.packmps("q", q, sess=sess)    
 #train_writer.close()
 save_name = folder + config_full_name + '_grandseq.pkl'
-qdict = {key:tn.packmps("q", val, sess=sess) for key, val in q.items()}
-meta = {'name': save_name, 'N': N, 'K': K, 'nsamples': nsample, 'random_restarts': random_restarts, 'coretype': coretype, 'optimizer': optimizer, 'rate': rate, 'decay': decay}
-supdict = {'meta': meta, 'df_c':df_c, 'q': qdict, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers], 'checkpoints': [initializer.checkpoints for initializer in initializers]}
+meta = {'name': save_name, 'N': N, 'K': K, 'nsamples': nsample, 'random_restarts': random_restarts, 'optimizer': optimizer, 'rate': rate, 'decay': decay}
+supdict = {'meta': meta, 'df_c':df_c, 'q': qdict}#, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers], 'checkpoints': [initializer.checkpoints for initializer in initializers]}
 with open(folder + config_full_name + '_grandseq.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
