@@ -195,24 +195,14 @@ class CollapsedStochasticBlock(CollapsedMixture):
         return lnprior + lnlink
 
 
-    @tfmethod(2)
-    def batch_logpred(self, Z, X, observed=None):
-        if observed is None:
-            observed = tf.ones((self.N, self.N), dtype=dtype)
-        else:
-            observed = tf.convert_to_tensor(observed, dtype)
-        membership = tf.reduce_sum(Z, axis=1, keepdims=True)
-        edgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed*X, Z) #Z^T*X*Z
-        notedgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed, Z) - edgecounts
+    @tfmethod(4)
+    def batch_logpred(self, Z, X, predict, observed):
+        if len(Z.shape)==4:
+            Z = Z[0]
+        
+        fullset = tf.logical_or(predict, observed)
 
-
-        lnlink = tf.reduce_sum(tf.lbeta(tf.stack([self.a + edgecounts,
-                                                  self.b + notedgecounts],
-                                                  axis=2)) -
-                               tf.lbeta(tf.stack([self.a + tf.zeros_like(edgecounts),
-                                                  self.b + tf.zeros_like(notedgecounts)],
-                                                  axis=2)), axis=[1,2])
-        return lnlink
+        return self.batch_logp(Z, X, observed=fullset) - self.batch_logp(Z, X, observed=observed)
 
 
 class CollapsedBipartiteStochasticBlock(CollapsedMultipartite):

@@ -21,7 +21,7 @@ from networkx import karate_club_graph, adjacency_matrix
 
 karate = karate_club_graph()
 X = adjacency_matrix(karate).toarray().astype('float64')
-N = 2
+N = 34
 X = X[:N,:N]
 
 #FLAGS

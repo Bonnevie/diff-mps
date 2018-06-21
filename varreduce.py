@@ -249,7 +249,7 @@ with tf.name_scope("model"):
 
         
     
-    var_reset += [tf.assign(decay_stage, 0)]
+    var_reset += [tf.assign(decay_stage, 1)]
     var_reset = tf.group(var_reset)
     all_steps = tf.group(list(step.values()) + [increment_decay_stage_op])
     initializers = []
