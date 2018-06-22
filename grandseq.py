@@ -21,13 +21,13 @@ from networkx import karate_club_graph, adjacency_matrix
 
 karate = karate_club_graph()
 X = adjacency_matrix(karate).toarray().astype('float64')
-N = 34
+N = 5
 X = X[:N,:N]
 
 #FLAGS
-name = 'permcore' 
+name = 'highrank' 
 version = 1
-Ntest = 161 #number of edges to use for testing
+Ntest = 2 #number of edges to use for testing
 K = 2 #number of communities to look for
 folder = name + 'V{}K{}'.format(version, K)
 
@@ -44,11 +44,11 @@ marginal = False
 timeit = False
 
 objectives = ['relax-learned']
-maxranks = [1,2]
+maxranks = [1,2,4]
 marginals = [False]
 unimixes = [False,True]
-coretypes = ['canon','perm'] 
-inits = ['random']
+coretypes = ['canon'] 
+inits = ['random', 'entropy', 'expectation']
 
 factor_code = ['R','S','L','M','U','C']
 factor_names = ['rank','restarts','objective','marginal','unimix','coretype','init']
@@ -108,7 +108,7 @@ def flattenlist(alist):
 #mask = tf.convert_to_tensor(mask.astype(dtype))
 #predictionmask = tf.convert_to_tensor(predictionmask.astype(dtype))
 
-def buildq(config, logp, predlogp, decay_stage):
+def buildq(config, logp, predlogp, decay_stage, Z):
     R, restart_ind, objective, marginal, unimix, coretype, init = config
     configok = True
     if short_key:
@@ -199,12 +199,14 @@ def buildq(config, logp, predlogp, decay_stage):
     else:
         raise(ValueError)
 
+    margentropy = q.marginalentropy()
+
     if init is 'random':
         mode_loss = tf.convert_to_tensor(np.array(0.).astype('float64'))
     elif init is 'rank1':
         mode_loss = tf.reduce_sum(tn.norm_rank1(q, tf.nn.softmax(Z)))
     elif init is 'entropy':
-        mode_loss = -(q.marginalentropy())
+        mode_loss = -margentropy
     elif init is 'expectation':
         mode_loss = -tf.reduce_sum(tf.log(q.batch_contraction(tf.nn.softmax(Z))))
 
@@ -224,7 +226,7 @@ def buildq(config, logp, predlogp, decay_stage):
 
     update = tf.group([step, var_step])
     
-    return (configok, q, cores, update, loss, predloss, init_opt, var_reset)
+    return (configok, q, cores, update, loss, predloss, margentropy, init_opt, var_reset)
         
     
 #var_reset += [tf.assign(decay_stage, 0)]
@@ -244,14 +246,28 @@ def buildq(config, logp, predlogp, decay_stage):
 # init = tf.global_variables_initializer()
 
 #run all configurations
-column_names = ['loss','predloss']
+column_names = ['loss','predloss','margentropy']
 
 index_c = pd.MultiIndex.from_product(factors + [range(nsteps)], names=factor_names + ['iteration'])
-df_c = pd.DataFrame(np.zeros((config_count*nsteps,len(column_names))), index=index_c, columns=column_names)
-
+df_c = pd.DataFrame(index=index_c, columns=column_names)
+#np.zeros((config_count*nsteps,len(column_names)))
 #train_writer = tf.summary.FileWriter('./train', sess.graph)
 
 qdict = {}
+
+tf.reset_default_graph()
+with tf.Session() as sess:
+    Z = tf.Variable(tf.random_normal((500,N, K), dtype='float64'), dtype='float64')
+    p = CollapsedStochasticBlock(N, K)
+    thissample = tf.placeholder(dtype='float64', shape=(100,N,K))
+    predlogp = p.batch_logpred(thissample, X, predict=predictionmask, observed=mask)
+    bound = KLcorrectedBound(p, X, [Z], batch=True, observed=mask)
+    sess.run(tf.variables_initializer([Z]))
+    bound.minimize()
+    Zmf = sess.run(tf.nn.softmax(Z))
+    gumbel = tf.exp(-tf.exp(-tf.random_uniform((100, 500, N, K), dtype='float64')))
+    samples = sess.run(tf.one_hot(tf.argmax(gumbel + Z, axis=-1), 2, dtype='float64'))
+    predmf = [sess.run(predlogp,feed_dict={thissample:samples_it}) for samples_it in np.transpose(samples, [1,0,2,3])]
 
 for config in all_config:
     tf.reset_default_graph()
@@ -261,7 +277,7 @@ for config in all_config:
         logp = lambda sample: p.batch_logp(sample, X, observed=mask)
         predlogp = lambda sample: p.batch_logpred(sample, X, predict=predictionmask, observed=mask)
         decay_stage = tf.Variable(1, name='decay_stage', trainable=False, dtype=tf.int32)
-        configok, q, cores, update, loss, predloss, init_opt, var_reset = buildq(config, logp, predlogp, decay_stage)            
+        configok, q, cores, update, loss, predloss, margentropy, init_opt, var_reset = buildq(config, logp, predlogp, decay_stage, Zmf)            
         if configok:    
             increment_decay_stage_op = tf.assign(decay_stage, decay_stage+1)
             var_reset += [increment_decay_stage_op]
@@ -273,19 +289,21 @@ for config in all_config:
             sess.run(randomize)
             configc = config + (0,)
             init_opt.minimize()
-            lossit, predlossit = sess.run([loss, predloss])
+            lossit, predlossit,entit = sess.run([loss, predloss,margentropy])
             df_c.loc[configc, 'loss'] = lossit
             df_c.loc[configc, 'predloss'] = predlossit    
-            for it in tqdm.trange(1,nsteps):
+            df_c.loc[configc, 'margentropy'] = entit
+            for it in np.arange(1,nsteps):
                 configc = config + (it,)
-                _, lossit, predlossit = sess.run([update, loss, predloss])
+                _, lossit, predlossit,entit = sess.run([update, loss, predloss,margentropy])
                 df_c.loc[configc, 'loss'] = lossit
                 df_c.loc[configc, 'predloss'] = predlossit
+                df_c.loc[configc, 'margentropy'] = entit
                 sess.run(increment_decay_stage_op)
             qdict[config] = tn.packmps("q", q, sess=sess)    
 #train_writer.close()
 save_name = folder + config_full_name + '_grandseq.pkl'
-meta = {'name': save_name, 'X': X, 'mask': mask, 'predictionmask': predictionmask, 'N': N, 'K': K, 'nsamples': nsample, 'random_restarts': random_restarts, 'optimizer': optimizer, 'rate': rate, 'decay': decay}
+meta = {'name': save_name, 'X': X, 'predmf': predmf, 'Zmf': Zmf, 'mask': mask, 'predictionmask': predictionmask, 'N': N, 'K': K, 'nsamples': nsample, 'random_restarts': random_restarts, 'optimizer': optimizer, 'rate': rate, 'decay': decay}
 supdict = {'meta': meta, 'df_c':df_c, 'q': qdict}#, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers], 'checkpoints': [initializer.checkpoints for initializer in initializers]}
 with open(folder + config_full_name + '_grandseq.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)

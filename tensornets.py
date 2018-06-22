@@ -898,6 +898,10 @@ class unimix(MPS):
             return tf.reduce_logsumexp(tf.stack([vec, scalar*tf.ones(vec.shape, dtype=dtype)],axis=1),axis=1)
         return vec_scalar_logsumexp(self.logalpha + super().batch_logp(Z), 
                                     self.log1malpha + self.log_uniform)
+    
+    def batch_contraction(self, Z):
+        return tf.exp(self.batch_logp(Z))
+    
     @tfmethod(1)
     def elbo(self, samples, f, fold=False, marginal=False, cvweight=1.):
         '''calculate ELBO or another entropy-weighted expectation using nsamples MC samples'''
