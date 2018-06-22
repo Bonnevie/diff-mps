@@ -96,7 +96,7 @@ class OrthogonalMatrix:
         if left_product:
             return -self.neg_matrix.dot(A)
         else:
-            return -tf.transpose(self.neg_matrix(tf.transpose(A)))
+            return -tf.transpose(self.neg_matrix.dot(tf.transpose(A)))
 
     def dense(self):
         return self.dot(tf.eye(self.N, dtype=dtype))
@@ -201,7 +201,9 @@ def packmps(name, mps, sess=None):
     elif (core_type is CanonicalPermutationCore or
           core_type is CanonicalPermutationCore2):
         core_metadata.update({'orthogonalstyle': mps.raw.orthogonalstyle})
-
+    elif (core_type is SwapInvariant):
+        core_metadata.update({'orthogonalstyle': mps.raw.orthogonalstyle})
+        core_metadata.pop('K')    
 
     #saver = tf.train.Saver(mps.raw.params(), max_to_keep=None)
     basic_metadata = {'core_type': core_type, 'name': name}#, 'save_path': saver.save(sess, folder + name + '.ckpt')}
@@ -1464,81 +1466,41 @@ class CanonicalPermutationCore2(Core):
 
 
 class SwapInvariant(Core):
-    def __init__(self, N, K, ranks):
+    def __init__(self, N, ranks, orthogonalstyle=CayleyOrthogonal):
         self.N  = N
-        self.K = K
+        self.K = 2
         self.ranks = ranks
+        self.right_canonical = False
+        self.left_canonical = False
+        self.orthogonalstyle = orthogonalstyle
         assert(len(ranks) == N+1)
         assert(ranks[0] == 1 & ranks[-1] == 1)
+        
+        def involute2(a,b):
+            return tf.stack([[a, b],[(tf.convert_to_tensor(1., dtype=dtype)-tf.square(a))/b, -a]])
+        
+        self.A = [tf.Variable(0.5*tf.ones((rank/2,), dtype=dtype), dtype=dtype) for rank in self.ranks[1:-1]] 
+        self.B = [tf.Variable(0.5*tf.ones((rank/2), dtype=dtype), dtype=dtype) for rank in self.ranks[1:-1]] 
+        self.U = [self.orthogonalstyle(rank) for rank in self.ranks[1:-1]]
+
         restack = lambda A, rank0, rank1: \
                       tf.transpose(tf.reshape(A, (rank0, self.K, rank1)),
                                    [1,0,2])
 
-        if left:
-            orthogonal_rank = 0
-            shape_factor = (self.K, 1)
-        else:
-            orthogonal_rank = 1
-            shape_factor = (1, self.K)
+        self.cores0 = [tf.Variable(randomorthogonal((rank0, rank1))) for rank0, rank1 
+                       in zip(self.ranks[:-1], self.ranks[1:])]
+        self.involutes = []
+        for A, B, U in zip(self.A, self.B, self.U):
+            subinvolutes = [involute2(a,b) for a,b in zip(tf.unstack(A),tf.unstack(B))]
+            M = subinvolutes[0]
+            for subinvolute in subinvolutes[1:]:
+                top = tf.pad(M, [[0,0],[0,2]])
+                bottom = tf.pad(subinvolute,[[M.shape[0],0],[0,0]])
+                M = tf.concat([top,bottom], axis=0)
+            self.involutes += [U.dot(U.dot(M), left_product=False)]
+        self.involutes = [tf.ones((1,1), dtype=dtype)] + self.involutes + [tf.ones((1,1), dtype=dtype)]
+        self.cores = [tf.stack([core0, tf.matmul(tf.matmul(in1, core0), in2)]) for core0, in1, in2 in zip(self.cores0, self.involutes[:-1], self.involutes[1:])]
 
-        #orthogonal matrices
-        self._U = [OrthogonalMatrix(self.K*ranks[orthogonal_rank]) for ranks
-                  in zip(self.ranks[:-1], self.ranks[1:])]
-        self.U = self._U
-        #set of canonical cores
-        self.cores = [restack(u.matrix[0:shape_factor[0]*rank0,
-                                       0:shape_factor[1]*rank1], rank0, rank1)
-                      for u, rank0, rank1 in zip(self.U, self.ranks[:-1],
-                                                 self.ranks[1:])]
+    def params(self):
+        return self.cores0 + [u._var for u in self.U] + self.A + self.B
 
-
-
-if __name__ is "__main__":
-    sess = tf.InteractiveSession()
-    N = 7
-    K = 3
-    R = K**N
-    ranks = (1,3,6,6,6,3,1)
-    #ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
-
-    true_index = np.eye(K)[np.random.randint(0, K, N)]
-
-    # Cost function with 1 good configuration
-    def f(z):
-        return -tf.reduce_sum(z) - tf.reduce_sum(z*true_index)
-
-    C = np.array([[0,1,0],[0,0,1],[1,0,0]])
-    orth=CanonicalPermutationCore2(N, K, ranks) #Canonical(N, K, ranks)
-    orth_model = MPS(N, K, ranks, cores=orth, normalized=False)
-
-    loss = orth_model.elbo(lambda x: 1., nsamples=10)
-    #optimization routine for marginal entropy
-    opt = tf.contrib.opt.ScipyOptimizerInterface(-orth_model.marginalentropy(), orth.params(), tol=1e-10,method='CG')
-
-    #"symmetry norm"
-    symf = tf.reduce_sum(symmetrynorm(orth_model.cores))
-
-    #optimization routine for symmetry norm
-    sopt = tf.contrib.opt.ScipyOptimizerInterface(symf, orth.params(), tol=1e-10,method='CG')
-
-    sess.run(tf.global_variables_initializer())
-    #tf.get_default_graph().finalize()
-    #opt.minimize()
-if False:
-    def estvar(samples):
-        mean = sum(samples)
-        return sum([np.square(sample-mean) for sample in samples])/(len(samples)-1)
-
-    ns = 10000
-    cost = lambda x: -tf.log(orth_model.contraction(x))
-    grads, _, _ = RELAX(*orth_model.buildcontrol(cost), orth.params())
-    print("RELAX:")
-    print(np.sqrt(estvar([grads[0][0].eval() for _ in range(ns)])))
-    sess.run(orth_model._nuvar.assign(-100))
-    print("UnRELAXed:")
-    print(np.sqrt(estvar([grads[0][0].eval() for _ in range(ns)])))
-    #quantities of potential interest
-#    G = orth.cores[1].eval()
-#    g0 = np.squeeze(orth.cores[0].eval())
-#    L = orth_model.inner_marginal[1].eval()
-#    O = orth.U[1].matrix.eval()

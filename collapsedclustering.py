@@ -200,7 +200,7 @@ class CollapsedStochasticBlock(CollapsedMixture):
         if len(Z.shape)==4:
             Z = Z[0]
         
-        fullset = tf.logical_or(predict, observed)
+        fullset = tf.cast(tf.logical_or(predict, observed), dtype)
 
         return self.batch_logp(Z, X, observed=fullset) - self.batch_logp(Z, X, observed=observed)
 

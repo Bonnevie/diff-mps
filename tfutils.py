@@ -22,7 +22,7 @@ def tfmethod(num_tensors, list_tensors=None):
     def tffunc_apply(func):
         @wraps(func)
         def newfunc(self, *args, output_collections=(), name=None, **kwargs):
-            with tf.name_scope(name, func.__name__):
+            with tf.name_scope(name, func.__name__.strip('_')):
                 if list_tensors:
                     tensors = [map_nlist(x, tf.convert_to_tensor) for x in args[:list_tensors]]
                     tensors += [tf.convert_to_tensor(x) for x in args[list_tensors:num_tensors]]

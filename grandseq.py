@@ -27,13 +27,13 @@ X = X[:N,:N]
 #FLAGS
 name = 'permcore' 
 version = 1
-Ntest = 1 #number of edges to use for testing
+Ntest = 161 #number of edges to use for testing
 K = 2 #number of communities to look for
 folder = name + 'V{}K{}'.format(version, K)
 
 #factors variations to run experiments over
-random_restarts = 1
-nsteps = 20000
+random_restarts = 5
+nsteps = 2000
 
 rate = 1e-1#[1e-1,1e-2,1e-3]
 decay = 1.
@@ -71,6 +71,9 @@ mask = mask < np.sort(mask.ravel())[Ntest]
 mask = np.logical_not(np.logical_or(mask,mask.T))
 mask = np.triu(mask, 1)
 predictionmask = np.triu(~mask, 1)
+
+mask = mask.astype(dtype)
+predictionmask = predictionmask.astype(dtype)
 
 concentration = 1.
 a = 1. + (concentration-1.)*np.eye(K)
@@ -121,9 +124,13 @@ def buildq(config, logp, predlogp, decay_stage):
         elif coretype == 'perm':
             if R == 1:
                 return (False,) + 7 * (None,)
-            #ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
-            ranks = (1,)+tuple(min((2)**min(r, N-r-2)*K, R) for r in range(N-1))+(1,)
-            cores = tn.CanonicalPermutationCore2(N, K, ranks)
+            if K == 2:
+                ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
+                cores = tn.SwapInvariant(N, ranks)    
+            else:
+                #ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
+                ranks = (1,)+tuple(min((2)**min(r, N-r-2)*K, R) for r in range(N-1))+(1,)
+                cores = tn.CanonicalPermutationCore2(N, K, ranks)
         elif coretype == 'standard':
             ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
             cores = tn.Core(N, K, ranks)
@@ -249,19 +256,21 @@ qdict = {}
 for config in all_config:
     tf.reset_default_graph()
     with tf.Session() as sess:        
-        tf.set_random_seed(1.)
+        tf.set_random_seed(config[1])
         p = CollapsedStochasticBlock(N, K, alpha=1, a=a, b=b)
         logp = lambda sample: p.batch_logp(sample, X, observed=mask)
-        predlogp = lambda sample: p.batch_logpred(sample, X, observed=predictionmask)
+        predlogp = lambda sample: p.batch_logpred(sample, X, predict=predictionmask, observed=mask)
         decay_stage = tf.Variable(1, name='decay_stage', trainable=False, dtype=tf.int32)
         configok, q, cores, update, loss, predloss, init_opt, var_reset = buildq(config, logp, predlogp, decay_stage)            
         if configok:    
             increment_decay_stage_op = tf.assign(decay_stage, decay_stage+1)
             var_reset += [increment_decay_stage_op]
             init = tf.global_variables_initializer()
+            randomize = cores.randomize_op()
             sess.graph.finalize()
             sess.run(init)
             sess.run(var_reset)
+            sess.run(randomize)
             configc = config + (0,)
             init_opt.minimize()
             lossit, predlossit = sess.run([loss, predloss])
@@ -276,7 +285,7 @@ for config in all_config:
             qdict[config] = tn.packmps("q", q, sess=sess)    
 #train_writer.close()
 save_name = folder + config_full_name + '_grandseq.pkl'
-meta = {'name': save_name, 'N': N, 'K': K, 'nsamples': nsample, 'random_restarts': random_restarts, 'optimizer': optimizer, 'rate': rate, 'decay': decay}
+meta = {'name': save_name, 'X': X, 'mask': mask, 'predictionmask': predictionmask, 'N': N, 'K': K, 'nsamples': nsample, 'random_restarts': random_restarts, 'optimizer': optimizer, 'rate': rate, 'decay': decay}
 supdict = {'meta': meta, 'df_c':df_c, 'q': qdict}#, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers], 'checkpoints': [initializer.checkpoints for initializer in initializers]}
 with open(folder + config_full_name + '_grandseq.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
