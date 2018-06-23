@@ -21,11 +21,11 @@ from networkx import karate_club_graph, adjacency_matrix
 
 karate = karate_club_graph()
 X = adjacency_matrix(karate).toarray().astype('float64')
-N = 5
+N = 34
 X = X[:N,:N]
 
 #FLAGS
-name = 'highrank' 
+name = 'allinit' 
 version = 1
 Ntest = 2 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -33,10 +33,10 @@ folder = name + 'V{}K{}'.format(version, K)
 
 #factors variations to run experiments over
 random_restarts = 5
-nsteps = 2000
+nsteps = 20000
 
-rate = 1e-1#[1e-1,1e-2,1e-3]
-decay = 1.
+rate = 1e-2#[1e-1,1e-2,1e-3]
+decay = 0.5
 decay_steps = nsteps/2.
 optimizer = 'ams' #options: ams
 nsample = 500
@@ -44,11 +44,11 @@ marginal = False
 timeit = False
 
 objectives = ['relax-learned']
-maxranks = [1,2,4]
+maxranks = [2]
 marginals = [False]
 unimixes = [False,True]
-coretypes = ['canon'] 
-inits = ['random', 'entropy', 'expectation']
+coretypes = ['canon', 'perm'] 
+inits = ['random', 'entropy', 'rank1']
 
 factor_code = ['R','S','L','M','U','C']
 factor_names = ['rank','restarts','objective','marginal','unimix','coretype','init']
