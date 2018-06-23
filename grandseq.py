@@ -27,7 +27,7 @@ X = X[:N,:N]
 #FLAGS
 name = 'allinit' 
 version = 1
-Ntest = 2 #number of edges to use for testing
+Ntest = 161 #number of edges to use for testing
 K = 2 #number of communities to look for
 folder = name + 'V{}K{}'.format(version, K)
 
@@ -36,7 +36,7 @@ random_restarts = 5
 nsteps = 20000
 
 rate = 1e-2#[1e-1,1e-2,1e-3]
-decay = 0.5
+decay = 1.
 decay_steps = nsteps/2.
 optimizer = 'ams' #options: ams
 nsample = 500

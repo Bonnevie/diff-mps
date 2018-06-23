@@ -18,13 +18,16 @@ from AMSGrad.optimizers import AMSGrad as amsgrad
 
 from networkx import karate_club_graph, adjacency_matrix
 
-karate = karate_club_graph()
-X = adjacency_matrix(karate).toarray().astype('float64')
-N = 6
+#karate = karate_club_graph()
+#X = adjacency_matrix(karate).toarray().astype('float64')
+X = np.ones((4,4))
+for i in range(4):
+    X[3-i,i] = 0.
+N = 4
 X = X[:N,:N]
 
 #FLAGS
-name = 'largegraph' 
+name = 'multtemp' 
 version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -35,23 +38,27 @@ random_restarts = 3
 varrelaxsteps = 40000
 ngsamples = 20000
 
-rate = 1e-1#[1e-1,1e-2,1e-3]
-decay = 1.
-decay_steps = varrelaxsteps/2.
+
+decay_steps = 20000
 optimizer = 'ams' #options: ams
-nsample = 500
+nsample = 100
+#nsample_vargrad = 100
 coretype = 'canon'
-train_temp = False
-flow_stages = 2
+train_temp = True
+flow_stages = 1
+flow_length = 15
 
-objectives = ['shadow', 'shadow-tight', 'score', 'relax', 'relax-marginal', 'relax-varreduce', 'relax-marginal-varreduce', 'relax-learned', 'relax-marginal-learned']
+learningrates = [1e-1]#[1e-1,1e-2,1e-3]
+decays = [1.]
+starttemps = [0.1, 0.5]
+objectives = ['score', 'shadow','relax','relax-varreduce','relax-learned']#['shadow','shadow-tight', 'score', 'relax', 'relax-tight', 'relax-varreduce','relax-learned']#['shadow', 'shadow-tight', 'score', 'relax', 'relax-marginal', 'relax-varreduce', 'relax-marginal-varreduce', 'relax-learned', 'relax-marginal-learned']
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
-maxranks = [4]#,12,15,18]
+maxranks = [2]#,12,15,18]
 
 
-factor_code = ['R','S','L']
-factor_names = ['rank','restarts','objective']
-factors = [maxranks, range(random_restarts), objectives]
+factor_code = ['R','S','L','A','D','T']
+factor_names = ['rank','restarts','objective','learningrate','decay','starttemp']
+factors = [maxranks, range(random_restarts), objectives,learningrates, decays, starttemps]
 short_key = False
 active_factors = [len(factor)>1 for factor in factors]
 all_config = list(product(*factors))
@@ -103,6 +110,7 @@ truegrad = {}
 flatgrad = {}
 cvweight = {}
 control_scale = {}
+control_weight = {}
 
 decay_stage = tf.Variable(1, name='decay_stage', trainable=False, dtype=tf.int32)
 increment_decay_stage_op = tf.assign(decay_stage, decay_stage+1)
@@ -126,7 +134,7 @@ def flattenlist(alist):
 with tf.name_scope("model"):
     print("building models...")
     for config in tqdm.tqdm(all_config, total=config_count):
-        R, restart_ind, objective = config
+        R, restart_ind, objective, learningrate0, decay, starttemp = config
         if short_key:
             config_name = ''.join([''.join([key, str(value)]) for key, value, active in zip(factor_code, config, active_factors) if active])
         else:
@@ -152,11 +160,11 @@ with tf.name_scope("model"):
             #build q model
             q[config] = tn.MPS(N, K, ranks, cores=cores[config])
             
-        tfrate = tf.convert_to_tensor(rate, dtype=dtype)
+        tfrate = tf.convert_to_tensor(learningrate0, dtype=dtype)
         if decay < 1.:
             learningrate = tf.train.exponential_decay(tfrate, decay_stage, decay_steps, decay)
         else:
-            learningrate = tfrate/tf.sqrt(tf.cast(decay_stage, 'float64'))
+            learningrate = tfrate#/tf.sqrt(tf.cast(decay_stage, 'float64'))
         
         if optimizer == 'ams':
             stepper = amsgrad(learning_rate=learningrate, beta1=beta1, beta2=beta2, epsilon=epsilon)
@@ -167,72 +175,72 @@ with tf.name_scope("model"):
             var_params = [q[config]._nuvar]
 
         control_samples = q[config].shadowrelax(nsample)
+        #control_samples_var = q[config].shadowrelax(nsample_vargrad)
         
         logq = q[config].batch_logp(all_anchors)
         trueloss[config] =  -tf.reduce_mean(tf.exp(logq)*(logp_all-logq))
         truegrad[config] = flattenlist(tf.gradients(trueloss[config], cores[config].params()))
+
+        var_reset += [q[config].set_temperature(starttemp)]
         if objective == 'shadow':
             loss = -tf.reduce_mean(q[config].elbo(control_samples[1], logp, marginal=False))
             grad = stepper.compute_gradients(loss, var_list=cores[config].params())
             var_grad = None
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.5)]
-        elif objective == 'shadow-tight':
-            loss = -tf.reduce_mean(q[config].elbo(control_samples[1], logp, marginal=False))
-            grad = stepper.compute_gradients(loss, var_list=cores[config].params())
-            var_grad = None
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+            var_reset += [q[config].set_nu(1.)]
         elif objective == 'relax':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=q[config].nu)
             var_grad = None
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+            var_reset += [q[config].set_nu(1.)]
         elif objective == 'score':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=0.)
             var_grad = None
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+            var_reset += [q[config].set_nu(1.)]
         elif objective == 'relax-varreduce':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params, weight=q[config].nu)
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+            var_reset += [q[config].set_nu(1.)]
         elif objective == 'relax-marginal':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=q[config].nu)
             var_grad = None
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1)]
+            var_reset += [q[config].set_nu(1.)]
         elif objective == 'relax-marginal-varreduce':
             cvweight[config] = tf.Variable(1., dtype=dtype)
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True, cvweight=cvweight[config])
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
             grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params + [cvweight[config]], weight=q[config].nu)
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1), tf.assign(cvweight[config], 1.)]
+            var_reset += [q[config].set_nu(1.), tf.assign(cvweight[config], 1.)]
         elif objective == 'relax-learned':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
-            control_scale[config] = tf.Variable(0., dtype=dtype)
+            control_weight[config] = tf.Variable(0., dtype=dtype)
             control_R = 2
             control_ranks = tuple(min(K**min(r, N-r), control_R) for r in range(N+1))
-            control_cores = tn.Core(N, K, control_ranks) 
+            control_cores = tn.Canonical(N, K, control_ranks) 
             control_mps = tn.MPS(N, K, control_ranks, cores=control_cores, normalized=False)
-            control = lambda sample: elbo(sample) + control_scale[config]*control_mps.batch_root(sample)
+            control_scale[config] = control_mps._scale()
+            control = lambda sample: elbo(sample) + control_weight[config]*control_mps.batch_root(sample)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
-            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params + [control_scale[config]] + control_cores.params(), weight=q[config].nu)
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1), tf.assign(control_scale[config], 0.), tf.initialize_variables(control_cores.params())]
+            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params + [control_weight[config]] + control_cores.params(), weight=q[config].nu)
+            var_reset += [q[config].set_nu(1.), tf.assign(control_weight[config], 0.), tf.initialize_variables(control_cores.params())]
         elif objective == 'relax-marginal-learned':
-            control_scale[config] = tf.Variable(0., dtype=dtype)
             cvweight[config] = tf.Variable(1., dtype=dtype)
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True, cvweight=cvweight[config])
+            control_weight[config] = tf.Variable(0., dtype=dtype)
             control_R = 2
             control_ranks = tuple(min(K**min(r, N-r), control_R) for r in range(N+1))
-            control_cores = tn.Core(N, K, control_ranks) 
+            control_cores = tn.Canonical(N, K, control_ranks) 
             control_mps = tn.MPS(N, K, control_ranks, cores=control_cores, normalized=False)
-            control = lambda sample: elbo(sample) + control_scale[config]*control_mps.batch_root(sample)
+            control_scale[config] = control_mps._scale()
+            control = lambda sample: elbo(sample) + control_weight[config]*control_mps.batch_root(sample)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
-            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params + [control_scale[config], cvweight[config]] + control_cores.params(), weight=q[config].nu)
-            var_reset += [q[config].set_nu(1.), q[config].set_temperature(0.1), tf.assign(control_scale[config], 0.), tf.initialize_variables(control_cores.params())]
+            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params + [control_weight[config], cvweight[config]] + control_cores.params(), weight=q[config].nu)
+            var_reset += [q[config].set_nu(1.), tf.assign(cvweight[config], 1.), tf.assign(control_weight[config], 0.), tf.initialize_variables(control_cores.params())]
         else:
             raise(ValueError)
 
@@ -282,7 +290,7 @@ with tf.name_scope("model"):
 
     #run all configurations
     column_names = ['residual', 'variance', 'bias','obsbias']
-    stages = ['initial'] + ['flow{}'.format(i) for i in range(flow_stages)] + ['converged']
+    stages = ['flow{}'.format(i) for i in range(flow_stages)]# + ['converged']
     num_vars = np.prod(flatgrad[config].get_shape()).value
     index_c = pd.MultiIndex.from_product(factors + [stages] + [np.arange(num_vars)], names=factor_names + ['stage', 'parameter'])
     df_c = pd.DataFrame(np.zeros((config_count*len(stages)*num_vars,len(column_names))), index=index_c, columns=column_names)
@@ -298,7 +306,7 @@ with tf.name_scope("model"):
             checkpoint("initial")
             for stage in range(flow_stages):
                 for bopt in baseopt_flat:
-                    bopt(10).minimize()
+                    bopt(flow_length).minimize()
                 checkpoint("flow{}".format(stage))
             for bopt in baseopt_flat:
                 bopt(1000).minimize()
@@ -312,7 +320,7 @@ with tf.name_scope("model"):
                 for it in tqdm.trange(varrelaxsteps):
                     sess.run(all_steps)
                     for config in all_config:
-                        objective = config[-1]
+                        objective = config[2]
                         configc = config + (checkin, )
                         try:
                             vartrace[configc]['temp'] += [sess.run(q[config].temperatures)[0]]
@@ -320,13 +328,17 @@ with tf.name_scope("model"):
                             if objective == 'relax-marginal-varreduce':
                                 vartrace[configc]['cvweight'] += [sess.run(cvweight[config])]
                             if objective == 'relax-learned':
-                                vartrace[configc]['control_scale'] = [sess.run(control_scale[config])]
+                                vartrace[configc]['control_weight'] += [sess.run(control_weight[config])]
+                                vartrace[configc]['control_scale'] += [sess.run(control_scale[config])]
                         except KeyError: 
                             vartrace[configc] = {}
                             vartrace[configc]['temp'] = [sess.run(q[config].temperatures)[0]]
                             vartrace[configc]['nu'] = [sess.run(q[config].nu)]
                             if objective == 'relax-marginal-varreduce':
                                 vartrace[configc]['cvweight'] = [sess.run(cvweight[config])]
+                            if objective == 'relax-learned':
+                                vartrace[configc]['control_weight'] = [sess.run(control_weight[config])]
+                                vartrace[configc]['control_scale'] = [sess.run(control_scale[config])]
                 for config in tqdm.tqdm(all_config, total=config_count):
                     configc = config + (checkin, slice(None))
                     gsamples = np.stack([sess.run(flatgrad[config]) for _ in range(ngsamples)])
@@ -354,7 +366,7 @@ with tf.name_scope("model"):
             
 save_name = folder + config_full_name + '_varreduce.pkl'
 qdict = {key:tn.packmps("q", val, sess=sess) for key, val in q.items()}
-meta = {'name': save_name, 'N': N, 'K': K, 'ngsamples': ngsamples, 'nsamples': nsample, 'random_restarts': random_restarts, 'coretype': coretype, 'optimizer': optimizer, 'rate': rate, 'decay': decay}
+meta = {'name': save_name, 'N': N, 'K': K, 'ngsamples': ngsamples, 'nsamples': nsample, 'random_restarts': random_restarts, 'coretype': coretype, 'optimizer': optimizer}
 supdict = {'meta': meta, 'df_c':df_c, 'q': qdict, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers], 'checkpoints': [initializer.checkpoints for initializer in initializers], 'traces': vartrace}
 with open(folder + config_full_name + '_varreduce.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
