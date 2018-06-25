@@ -270,7 +270,7 @@ with tf.Session() as sess:
     samples = sess.run(tf.one_hot(tf.argmax(gumbel + Z, axis=-1), 2, dtype='float64'))
     predmf = [sess.run(predlogp,feed_dict={thissample:samples_it}) for samples_it in np.transpose(samples, [1,0,2,3])]
 
-for config in all_config:
+for config in tqdm.tqdm(all_config,total=config_count):
     tf.reset_default_graph()
     with tf.Session() as sess:        
         tf.set_random_seed(config[1])
@@ -296,7 +296,7 @@ for config in all_config:
             df_c.loc[configc, 'margentropy'] = entit
             df_c.loc[configc, 'time'] = 0.
             t0 = time.time()
-            for it in tqdm.trange(1,nsteps):
+            for it in range(1,nsteps):
                 configc = config + (it,)
                 _, lossit, predlossit,entit = sess.run([update, loss, predloss,margentropy])
                 df_c.loc[configc, 'loss'] = lossit
