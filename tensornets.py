@@ -1332,7 +1332,7 @@ class PermutationCore_augmented(Core):
 
 
 class CanonicalPermutationCore(Core):
-    def __init__(self, N, K, ranks, orthogonalstyle=CayleyOrthogonal):
+    def __init__(self, N, K, ranks, orthogonalstyle=OrthogonalMatrix):
         self.N = N
         self.K = K
         self.ranks = ranks
@@ -1380,7 +1380,7 @@ class CanonicalPermutationCore(Core):
         return [u._var for u in self.Uk] + [u._var for u in self.Uones] + [self.cap]
 
 class CanonicalPermutationCore2(Core):
-    def __init__(self, N, K, ranks, orthogonalstyle=CayleyOrthogonal):
+    def __init__(self, N, K, ranks, orthogonalstyle=OrthogonalMatrix):
         self.N = N
         self.K = K
         self.ranks = ranks
@@ -1472,7 +1472,7 @@ class CanonicalPermutationCore2(Core):
 
 
 class SwapInvariant(Core):
-    def __init__(self, N, ranks, orthogonalstyle=CayleyOrthogonal):
+    def __init__(self, N, ranks, orthogonalstyle=OrthogonalMatrix):
         self.N  = N
         self.K = 2
         self.ranks = ranks
