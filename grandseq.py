@@ -6,6 +6,7 @@ from relaxflow.reparam import CategoricalReparam
 import time
 dtype = 'float64'
 
+import time
 import tqdm
 import pandas as pd
 
@@ -25,34 +26,34 @@ N = 34
 X = X[:N,:N]
 
 #FLAGS
-name = 'allinit' 
+name = 'restarts' 
 version = 1
 Ntest = 161 #number of edges to use for testing
 K = 2 #number of communities to look for
 folder = name + 'V{}K{}'.format(version, K)
 
 #factors variations to run experiments over
-random_restarts = 5
-nsteps = 20000
+random_restarts = 3
+nsteps = 2500
 
-rate = 1e-2#[1e-1,1e-2,1e-3]
 decay = 1.
 decay_steps = nsteps/2.
 optimizer = 'ams' #options: ams
-nsample = 500
 marginal = False
 timeit = False
 
 objectives = ['relax-learned']
 maxranks = [2]
 marginals = [False]
-unimixes = [False,True]
-coretypes = ['canon', 'perm'] 
-inits = ['random', 'entropy', 'rank1']
+unimixes = [False]
+coretypes = ['canon'] 
+inits = ['random']
+learningrates = [0.01]#[1e-1,1e-2,1e-3]
+nsamples = [500]
 
-factor_code = ['R','S','L','M','U','C']
-factor_names = ['rank','restarts','objective','marginal','unimix','coretype','init']
-factors = [maxranks, range(random_restarts), objectives, marginals, unimixes,coretypes,inits]
+factor_code = ['R','S','L','M','U','C','A']
+factor_names = ['rank','restarts','objective','marginal','unimix','coretype','init','learningrate','nsample']
+factors = [maxranks, range(random_restarts), objectives, marginals, unimixes,coretypes,inits, learningrates, nsamples]
 short_key = False
 active_factors = [len(factor)>1 for factor in factors]
 all_config = list(product(*factors))
@@ -109,7 +110,7 @@ def flattenlist(alist):
 #predictionmask = tf.convert_to_tensor(predictionmask.astype(dtype))
 
 def buildq(config, logp, predlogp, decay_stage, Z):
-    R, restart_ind, objective, marginal, unimix, coretype, init = config
+    R, restart_ind, objective, marginal, unimix, coretype, init, learningrate, nsample = config
     configok = True
     if short_key:
         config_name = ''.join([''.join([key, str(value)]) for key, value, active in zip(factor_code, config, active_factors) if active])
@@ -120,7 +121,7 @@ def buildq(config, logp, predlogp, decay_stage, Z):
         #set coretype
         if coretype == 'canon':
             ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
-            cores = tn.Canonical(N, K, ranks, orthogonalstyle=tn.CayleyOrthogonal)
+            cores = tn.Canonical(N, K, ranks, orthogonalstyle=tn.OrthogonalMatrix)
         elif coretype == 'perm':
             if R == 1:
                 return (False,) + 7 * (None,)
@@ -139,12 +140,12 @@ def buildq(config, logp, predlogp, decay_stage, Z):
 
         #build q model
         if unimix:
-            q = tn.MPS(N, K, ranks, cores=cores)
-        else:
             q = tn.unimix(N, K, ranks, cores=cores)
-
+        else:
+            q = tn.MPS(N, K, ranks, cores=cores)
+            
     
-    tfrate = tf.convert_to_tensor(rate, dtype=dtype)
+    tfrate = tf.convert_to_tensor(learningrate, dtype=dtype)
     if decay < 1.:
         learningrate = tf.train.exponential_decay(tfrate, decay_stage, decay_steps, decay)
     else:
@@ -165,27 +166,27 @@ def buildq(config, logp, predlogp, decay_stage, Z):
     dloss = tf.reduce_mean(elbo(control_samples[1]))
 
     if objective == 'shadow':
-        grad = stepper.compute_gradients(dloss, var_list=cores.params())
+        grad = stepper.compute_gradients(dloss, var_list=q.params())
         var_grad = None
         var_reset = [q.set_nu(1.), q.set_temperature(0.5)]
     elif objective == 'shadow-tight':
-        grad = stepper.compute_gradients(dloss, var_list=cores.params())
+        grad = stepper.compute_gradients(dloss, var_list=q.params())
         var_grad = None
         var_reset = [q.set_nu(1.), q.set_temperature(0.1)]
     elif objective == 'relax':
         relax_params = tn.buildcontrol(control_samples, q.batch_logp, elbo)
-        grad, _ = RELAX(*relax_params, hard_params=cores.params(), var_params=[], weight=q.nu)
+        grad, _ = RELAX(*relax_params, hard_params=q.params(), var_params=[], weight=q.nu)
         var_grad = None
-        var_reset = [q.set_nu(1.), q.set_temperature(0.1)]
+        var_reset = [q.set_nu(1.), q.set_temperature(0.5)]
     elif objective == 'score':
         relax_params = tn.buildcontrol(control_samples, q.batch_logp, elbo)
-        grad, _ = RELAX(*relax_params, hard_params=cores.params(), var_params=[], weight=0.)
+        grad, _ = RELAX(*relax_params, hard_params=q.params(), var_params=[], weight=0.)
         var_grad = None
-        var_reset = [q.set_nu(1.), q.set_temperature(0.1)]
+        var_reset = [q.set_nu(1.), q.set_temperature(0.5)]
     elif objective == 'relax-varreduce':
         relax_params = tn.buildcontrol(control_samples, q.batch_logp, elbo)
-        grad, var_grad = RELAX(*relax_params, hard_params=cores.params(), var_params=q.var_params(), weight=q.nu)
-        var_reset = [q.set_nu(1.), q.set_temperature(0.1)]
+        grad, var_grad = RELAX(*relax_params, hard_params=q.params(), var_params=q.var_params(), weight=q.nu)
+        var_reset = [q.set_nu(1.), q.set_temperature(0.5)]
     elif objective == 'relax-learned':
         control_scale = tf.Variable(0., dtype=dtype)
         control_R = 2
@@ -194,8 +195,8 @@ def buildq(config, logp, predlogp, decay_stage, Z):
         control_mps = tn.MPS(N, K, control_ranks, cores=control_cores, normalized=False)
         control = lambda sample: elbo(sample) + control_scale*control_mps.batch_root(sample)
         relax_params = tn.buildcontrol(control_samples, q.batch_logp, elbo, fhat=control)
-        grad, var_grad = RELAX(*relax_params, hard_params=cores.params(), var_params=q.var_params() + [control_scale] + control_cores.params(), weight=q.nu)
-        var_reset = [tf.assign(control_scale, 0.), tf.initialize_variables(control_cores.params())]
+        grad, var_grad = RELAX(*relax_params, hard_params=q.params(), var_params=q.var_params() + [control_scale] + control_cores.params(), weight=q.nu)
+        var_reset = [q.set_nu(1.), q.set_temperature(0.5), tf.assign(control_scale, 0.), tf.initialize_variables(control_cores.params())]
     else:
         raise(ValueError)
 
@@ -246,7 +247,7 @@ def buildq(config, logp, predlogp, decay_stage, Z):
 # init = tf.global_variables_initializer()
 
 #run all configurations
-column_names = ['loss','predloss','margentropy']
+column_names = ['loss', 'predloss', 'margentropy', 'time']
 
 index_c = pd.MultiIndex.from_product(factors + [range(nsteps)], names=factor_names + ['iteration'])
 df_c = pd.DataFrame(index=index_c, columns=column_names)
@@ -293,17 +294,22 @@ for config in all_config:
             df_c.loc[configc, 'loss'] = lossit
             df_c.loc[configc, 'predloss'] = predlossit    
             df_c.loc[configc, 'margentropy'] = entit
-            for it in np.arange(1,nsteps):
+            df_c.loc[configc, 'time'] = 0.
+            t0 = time.time()
+            for it in tqdm.trange(1,nsteps):
                 configc = config + (it,)
                 _, lossit, predlossit,entit = sess.run([update, loss, predloss,margentropy])
                 df_c.loc[configc, 'loss'] = lossit
                 df_c.loc[configc, 'predloss'] = predlossit
                 df_c.loc[configc, 'margentropy'] = entit
+                df_c.loc[configc, 'time'] = time.time() - t0
                 sess.run(increment_decay_stage_op)
             qdict[config] = tn.packmps("q", q, sess=sess)    
 #train_writer.close()
 save_name = folder + config_full_name + '_grandseq.pkl'
-meta = {'name': save_name, 'X': X, 'predmf': predmf, 'Zmf': Zmf, 'mask': mask, 'predictionmask': predictionmask, 'N': N, 'K': K, 'nsamples': nsample, 'random_restarts': random_restarts, 'optimizer': optimizer, 'rate': rate, 'decay': decay}
+meta = {'name': save_name, 'X': X, 'predmf': predmf, 'Zmf': Zmf, 'mask': mask, 'predictionmask': predictionmask, 
+        'N': N, 'K': K, 'Ntest': Ntest, 'factors': factors, 'factor_names': factor_names, 'config_count': config_count,
+        'random_restarts': random_restarts, 'optimizer': optimizer, 'decay': decay, 'concentration': concentration}
 supdict = {'meta': meta, 'df_c':df_c, 'q': qdict}#, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers], 'checkpoints': [initializer.checkpoints for initializer in initializers]}
 with open(folder + config_full_name + '_grandseq.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)

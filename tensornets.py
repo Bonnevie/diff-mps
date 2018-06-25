@@ -944,7 +944,8 @@ class unimix(MPS):
         logalpha_hat = tf.log(alpha)
         return tf.assign(self.logalpha_var, tf.log(tf.exp(-logalpha_hat)-1.))
 
-    
+    def params(self):
+        return super().params() + [self.logalpha_var]
 
 class unimixIS(unimix):
     def batch_logp(self, Z):

@@ -27,7 +27,7 @@ N = 4
 X = X[:N,:N]
 
 #FLAGS
-name = 'multtemp' 
+name = 'trackbias' 
 version = 1
 Ntest = 0 #number of edges to use for testing
 K = 2 #number of communities to look for
@@ -35,7 +35,7 @@ folder = name + 'V{}K{}'.format(version, K)
 
 #factors variations to run experiments over
 random_restarts = 3
-varrelaxsteps = 40000
+varrelaxsteps = 0
 ngsamples = 20000
 
 
@@ -45,13 +45,13 @@ nsample = 100
 #nsample_vargrad = 100
 coretype = 'canon'
 train_temp = True
-flow_stages = 1
-flow_length = 15
+flow_stages = 10
+flow_length = 5
 
 learningrates = [1e-1]#[1e-1,1e-2,1e-3]
 decays = [1.]
-starttemps = [0.1, 0.5]
-objectives = ['score', 'shadow','relax','relax-varreduce','relax-learned']#['shadow','shadow-tight', 'score', 'relax', 'relax-tight', 'relax-varreduce','relax-learned']#['shadow', 'shadow-tight', 'score', 'relax', 'relax-marginal', 'relax-varreduce', 'relax-marginal-varreduce', 'relax-learned', 'relax-marginal-learned']
+starttemps = [0.5]
+objectives = ['relax']#['shadow','shadow-tight', 'score', 'relax', 'relax-tight', 'relax-varreduce','relax-learned']#['shadow', 'shadow-tight', 'score', 'relax', 'relax-marginal', 'relax-varreduce', 'relax-marginal-varreduce', 'relax-learned', 'relax-marginal-learned']
 #Options are: '' for ordinary cores, canon' for canonical, and 'perm' for permutation-free
 maxranks = [2]#,12,15,18]
 
@@ -107,6 +107,7 @@ cores = {}
 step = {}
 trueloss = {}
 truegrad = {}
+truegradnorm = {}
 flatgrad = {}
 cvweight = {}
 control_scale = {}
@@ -180,41 +181,41 @@ with tf.name_scope("model"):
         logq = q[config].batch_logp(all_anchors)
         trueloss[config] =  -tf.reduce_mean(tf.exp(logq)*(logp_all-logq))
         truegrad[config] = flattenlist(tf.gradients(trueloss[config], cores[config].params()))
-
+        truegradnorm[config] = tf.linalg.norm(truegrad[config])
         var_reset += [q[config].set_temperature(starttemp)]
         if objective == 'shadow':
             loss = -tf.reduce_mean(q[config].elbo(control_samples[1], logp, marginal=False))
-            grad = stepper.compute_gradients(loss, var_list=cores[config].params())
+            grad = stepper.compute_gradients(loss, var_list=q[config].params())
             var_grad = None
             var_reset += [q[config].set_nu(1.)]
         elif objective == 'relax':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
-            grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=q[config].nu)
+            grad, _ = RELAX(*relax_params, hard_params=q[config].params(), var_params=[], weight=q[config].nu)
             var_grad = None
             var_reset += [q[config].set_nu(1.)]
         elif objective == 'score':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
-            grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=0.)
+            grad, _ = RELAX(*relax_params, hard_params=q[config].params(), var_params=[], weight=0.)
             var_grad = None
             var_reset += [q[config].set_nu(1.)]
         elif objective == 'relax-varreduce':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
-            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params, weight=q[config].nu)
+            grad, var_grad = RELAX(*relax_params, hard_params=q[config].params(), var_params=var_params, weight=q[config].nu)
             var_reset += [q[config].set_nu(1.)]
         elif objective == 'relax-marginal':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
-            grad, _ = RELAX(*relax_params, hard_params=cores[config].params(), var_params=[], weight=q[config].nu)
+            grad, _ = RELAX(*relax_params, hard_params=q[config].params(), var_params=[], weight=q[config].nu)
             var_grad = None
             var_reset += [q[config].set_nu(1.)]
         elif objective == 'relax-marginal-varreduce':
             cvweight[config] = tf.Variable(1., dtype=dtype)
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=True, cvweight=cvweight[config])
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo)
-            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params + [cvweight[config]], weight=q[config].nu)
+            grad, var_grad = RELAX(*relax_params, hard_params=q[config].params(), var_params=var_params + [cvweight[config]], weight=q[config].nu)
             var_reset += [q[config].set_nu(1.), tf.assign(cvweight[config], 1.)]
         elif objective == 'relax-learned':
             elbo = lambda sample: -q[config].elbo(sample, logp, marginal=False)
@@ -226,7 +227,7 @@ with tf.name_scope("model"):
             control_scale[config] = control_mps._scale()
             control = lambda sample: elbo(sample) + control_weight[config]*control_mps.batch_root(sample)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
-            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params + [control_weight[config]] + control_cores.params(), weight=q[config].nu)
+            grad, var_grad = RELAX(*relax_params, hard_params=q[config].params(), var_params=var_params + [control_weight[config]] + control_cores.params(), weight=q[config].nu)
             var_reset += [q[config].set_nu(1.), tf.assign(control_weight[config], 0.), tf.initialize_variables(control_cores.params())]
         elif objective == 'relax-marginal-learned':
             cvweight[config] = tf.Variable(1., dtype=dtype)
@@ -239,7 +240,7 @@ with tf.name_scope("model"):
             control_scale[config] = control_mps._scale()
             control = lambda sample: elbo(sample) + control_weight[config]*control_mps.batch_root(sample)
             relax_params = tn.buildcontrol(control_samples, q[config].batch_logp, elbo, fhat=control)
-            grad, var_grad = RELAX(*relax_params, hard_params=cores[config].params(), var_params=var_params + [control_weight[config], cvweight[config]] + control_cores.params(), weight=q[config].nu)
+            grad, var_grad = RELAX(*relax_params, hard_params=q[config].params(), var_params=var_params + [control_weight[config], cvweight[config]] + control_cores.params(), weight=q[config].nu)
             var_reset += [q[config].set_nu(1.), tf.assign(cvweight[config], 1.), tf.assign(control_weight[config], 0.), tf.initialize_variables(control_cores.params())]
         else:
             raise(ValueError)
@@ -290,10 +291,11 @@ with tf.name_scope("model"):
 
     #run all configurations
     column_names = ['residual', 'variance', 'bias','obsbias']
-    stages = ['flow{}'.format(i) for i in range(flow_stages)]# + ['converged']
+    stages = ['initial'] + ['flow{}'.format(i) for i in range(flow_stages)]# + ['converged']
     num_vars = np.prod(flatgrad[config].get_shape()).value
     index_c = pd.MultiIndex.from_product(factors + [stages] + [np.arange(num_vars)], names=factor_names + ['stage', 'parameter'])
     df_c = pd.DataFrame(np.zeros((config_count*len(stages)*num_vars,len(column_names))), index=index_c, columns=column_names)
+    
     
     vartrace = {}
 
@@ -366,7 +368,7 @@ with tf.name_scope("model"):
             
 save_name = folder + config_full_name + '_varreduce.pkl'
 qdict = {key:tn.packmps("q", val, sess=sess) for key, val in q.items()}
-meta = {'name': save_name, 'N': N, 'K': K, 'ngsamples': ngsamples, 'nsamples': nsample, 'random_restarts': random_restarts, 'coretype': coretype, 'optimizer': optimizer}
+meta = {'name': save_name, 'N': N, 'K': K, 'stages': stages, 'flow_stages': flow_stages, 'flow_length': flow_length, 'config_count': config_count, 'ngsamples': ngsamples, 'factors': factors, 'factor_names': factor_names, 'nsamples': nsample, 'random_restarts': random_restarts, 'coretype': coretype, 'optimizer': optimizer}
 supdict = {'meta': meta, 'df_c':df_c, 'q': qdict, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers], 'checkpoints': [initializer.checkpoints for initializer in initializers], 'traces': vartrace}
 with open(folder + config_full_name + '_varreduce.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
