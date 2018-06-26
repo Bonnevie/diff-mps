@@ -747,6 +747,22 @@ class MPS:
                 # A[i,j] = self.K*tf.foldl(tf.matmul, factors)
             return tf.reshape(tf.stack(A), (self.N, self.N))
 
+    def covariance(self, nsamples=100000, blockgroup=True, scale=False):
+        z = self.sample(nsamples)
+        if blockgroup:
+            z = tf.reshape(z, (z.shape[0], -1))
+            m = tf.reshape(self.marginals(), (-1,1))
+        else:
+            z = tf.reshape(tf.transpose(z,[0,2,1]), (z.shape[0], -1))
+            m = tf.reshape(tf.transpose(self.marginals()), (-1,1))  
+        cov =  tf.matmul(z, z, transpose_a=True)/nsamples - m*tf.transpose(m)
+        if scale:
+            var = m*(1.-m)
+            scale = tf.sqrt(var*tf.transpose(var))
+            return cov/scale
+        else:
+            return cov    
+
     @tfmethod(0)
     def marginals(self, uniform=False):
         if uniform:
@@ -1501,7 +1517,7 @@ class SwapInvariant(Core):
             M = subinvolutes[0]
             for subinvolute in subinvolutes[1:]:
                 top = tf.pad(M, [[0,0],[0,2]])
-                bottom = tf.pad(subinvolute,[[M.shape[0],0],[0,0]])
+                bottom = tf.pad(subinvolute,[[0,0],[M.shape[0],0]])
                 M = tf.concat([top,bottom], axis=0)
             self.involutes += [U.dot(U.dot(M), left_product=False)]
         self.involutes = [tf.ones((1,1), dtype=dtype)] + self.involutes + [tf.ones((1,1), dtype=dtype)]

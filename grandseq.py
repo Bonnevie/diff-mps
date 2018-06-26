@@ -20,36 +20,12 @@ from AMSGrad.optimizers import AMSGrad as amsgrad
 
 from networkx import karate_club_graph, adjacency_matrix
 
+from grandseqmeta import *
+
 karate = karate_club_graph()
 X = adjacency_matrix(karate).toarray().astype('float64')
 N = 34
 X = X[:N,:N]
-
-#FLAGS
-name = 'restarts' 
-version = 1
-Ntest = 161 #number of edges to use for testing
-K = 2 #number of communities to look for
-folder = name + 'V{}K{}'.format(version, K)
-
-#factors variations to run experiments over
-random_restarts = 3
-nsteps = 2500
-
-decay = 1.
-decay_steps = nsteps/2.
-optimizer = 'ams' #options: ams
-marginal = False
-timeit = False
-
-objectives = ['relax-learned']
-maxranks = [2]
-marginals = [False]
-unimixes = [False]
-coretypes = ['canon'] 
-inits = ['random']
-learningrates = [0.01]#[1e-1,1e-2,1e-3]
-nsamples = [500]
 
 factor_code = ['R','S','L','M','U','C','A']
 factor_names = ['rank','restarts','objective','marginal','unimix','coretype','init','learningrate','nsample']
@@ -211,7 +187,7 @@ def buildq(config, logp, predlogp, decay_stage, Z):
     elif init is 'expectation':
         mode_loss = -tf.reduce_sum(tf.log(q.batch_contraction(tf.nn.softmax(Z))))
 
-    init_opt = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=cores.params(),method='CG')
+    init_opt = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=cores.params(),method='CG',options={'maxiter':20})
             
     
     #step = stepper.apply_gradients(var_grad)
@@ -296,7 +272,7 @@ for config in tqdm.tqdm(all_config,total=config_count):
             df_c.loc[configc, 'margentropy'] = entit
             df_c.loc[configc, 'time'] = 0.
             t0 = time.time()
-            for it in range(1,nsteps):
+            for it in tqdm.trange(1,nsteps):
                 configc = config + (it,)
                 _, lossit, predlossit,entit = sess.run([update, loss, predloss,margentropy])
                 df_c.loc[configc, 'loss'] = lossit
