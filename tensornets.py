@@ -1061,14 +1061,38 @@ def norm_rank1(mps, rank1):
     transfer = [multikron(core, core) for core in cores]
     N  = rank1.shape[0].value
 
-    normr1 = tf.einsum('kni,lni->', rank1, rank1)
     innerproducts = mps.batch_contraction(rank1)
+    
+    normr1 = tf.reduce_prod(tf.einsum('kni,lni->kln',rank1, rank1), axis=2)
+    normr1 = tf.reduce_sum(normr1)/N**2.
 
     normmps = tf.ones((1,1), dtype=dtype)
     for core in transfer:
         normmps = inner_contraction(normmps, core)
 
-    return normmps + tf.reduce_sum(normr1)/N**2. - 2.*tf.reduce_sum(innerproducts)/N
+    return normmps + normr1 - 2.*tf.reduce_sum(innerproducts)/N 
+
+def lognorm_rank1(mps, rank1):
+    cores = mps.cores
+    transfer = [multikron(core, core) for core in cores]
+    N  = rank1.shape[0].value
+
+    lognormr1 = tf.reduce_sum(tf.log(tf.einsum('kni,lni->kln',rank1, rank1)), axis=2)
+    lognormr1 = tf.reduce_logsumexp(lognormr1)-2.*tf.log(tf.convert_to_tensor(N, dtype=dtype))
+
+    normmps = tf.ones((1,1), dtype=dtype)
+    for core in transfer:
+        normmps = inner_contraction(normmps, core)
+    normmps = tf.squeeze(normmps)
+    lognormmps = tf.log(normmps) - (2.*tf.log(mps._scale()) if mps.normalized else 0.)
+    
+    alpha = tf.reduce_logsumexp([lognormmps, lognormr1])
+    
+    innerproducts = mps.batch_logp(rank1)
+    logcross = tf.reduce_logsumexp(innerproducts) + tf.log(tf.convert_to_tensor(2., dtype)) - tf.log(tf.convert_to_tensor(N, dtype))
+    
+    return tf.log1p(tf.exp(alpha) - tf.exp(logcross))
+
 
 def symmetrynorm(cores):
     '''

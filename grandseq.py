@@ -85,7 +85,7 @@ def flattenlist(alist):
 #mask = tf.convert_to_tensor(mask.astype(dtype))
 #predictionmask = tf.convert_to_tensor(predictionmask.astype(dtype))
 
-def buildq(config, logp, predlogp, decay_stage, Z):
+def buildq(config, logp, predlogp, decay_stage, Z, bounds):
     R, restart_ind, objective, marginal, unimix, coretype, init, learningrate, nsample = config
     configok = True
     if short_key:
@@ -103,7 +103,7 @@ def buildq(config, logp, predlogp, decay_stage, Z):
                 return (False,) + 7 * (None,)
             if K == 2:
                 ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
-                cores = tn.SwapInvariant(N, ranks)    
+                cores = tn.SwapInvariant(N, ranks,  orthogonalstyle=tn.OrthogonalMatrix)    
             else:
                 #ranks = tuple(min(K**min(r, N-r), R) for r in range(N+1))
                 ranks = (1,)+tuple(min((2)**min(r, N-r-2)*K, R) for r in range(N-1))+(1,)
@@ -181,13 +181,21 @@ def buildq(config, logp, predlogp, decay_stage, Z):
     if init is 'random':
         mode_loss = tf.convert_to_tensor(np.array(0.).astype('float64'))
     elif init is 'rank1':
-        mode_loss = tf.reduce_sum(tn.norm_rank1(q, tf.nn.softmax(Z)))
+        mode_loss = tf.reduce_sum(tn.lognorm_rank1(q, tf.nn.softmax(tf.concat([Z,tf.zeros((Z.shape[0], N, K), dtype=dtype)], axis=0))))
+    elif init is 'rank1_best':
+        Zbest = Z[np.argsort([np.mean(x) for x in predmf])[-20:]]
+        mode_loss = tf.reduce_sum(tn.lognorm_rank1(q, tf.nn.softmax(Zbest)))
+    elif init is 'rank1_diverse':
+        Zbest = Z[np.argsort([np.mean(x) for x in predmf])[-20:]]
+        mode_loss = tf.reduce_sum(tn.lognorm_rank1(q, tf.nn.softmax(Zbest)))
     elif init is 'entropy':
         mode_loss = -margentropy
     elif init is 'expectation':
         mode_loss = -tf.reduce_sum(tf.log(q.batch_contraction(tf.nn.softmax(Z))))
-
-    init_opt = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=cores.params(),method='CG',options={'maxiter':20})
+    elif init is 'expectation_best':
+        Z = Z[np.argsort([np.mean(x) for x in predmf])[-20:]]
+        mode_loss = -tf.reduce_sum(tf.log(q.batch_contraction(tf.nn.softmax(Z))))
+    init_opt = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=q.params(),method='CG',options={'maxiter':30})
             
     
     #step = stepper.apply_gradients(var_grad)
@@ -234,6 +242,7 @@ qdict = {}
 
 tf.reset_default_graph()
 with tf.Session() as sess:
+    tf.set_random_seed(1)
     Z = tf.Variable(tf.random_normal((500,N, K), dtype='float64'), dtype='float64')
     p = CollapsedStochasticBlock(N, K)
     thissample = tf.placeholder(dtype='float64', shape=(100,N,K))
@@ -241,6 +250,7 @@ with tf.Session() as sess:
     bound = KLcorrectedBound(p, X, [Z], batch=True, observed=mask)
     sess.run(tf.variables_initializer([Z]))
     bound.minimize()
+    bounds = sess.run(bound.bound)
     Zmf = sess.run(tf.nn.softmax(Z))
     gumbel = tf.exp(-tf.exp(-tf.random_uniform((100, 500, N, K), dtype='float64')))
     samples = sess.run(tf.one_hot(tf.argmax(gumbel + Z, axis=-1), 2, dtype='float64'))
@@ -254,7 +264,7 @@ for config in tqdm.tqdm(all_config,total=config_count):
         logp = lambda sample: p.batch_logp(sample, X, observed=mask)
         predlogp = lambda sample: p.batch_logpred(sample, X, predict=predictionmask, observed=mask)
         decay_stage = tf.Variable(1, name='decay_stage', trainable=False, dtype=tf.int32)
-        configok, q, cores, update, loss, predloss, margentropy, init_opt, var_reset = buildq(config, logp, predlogp, decay_stage, Zmf)            
+        configok, q, cores, update, loss, predloss, margentropy, init_opt, var_reset = buildq(config, logp, predlogp, decay_stage, Zmf, bounds)            
         if configok:    
             increment_decay_stage_op = tf.assign(decay_stage, decay_stage+1)
             var_reset += [increment_decay_stage_op]
