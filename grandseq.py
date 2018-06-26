@@ -27,7 +27,7 @@ X = adjacency_matrix(karate).toarray().astype('float64')
 N = 34
 X = X[:N,:N]
 
-factor_code = ['R','S','L','M','U','C','A']
+factor_code = ['R','S','L','M','U','C','A','B']
 factor_names = ['rank','restarts','objective','marginal','unimix','coretype','init','learningrate','nsample']
 factors = [maxranks, range(random_restarts), objectives, marginals, unimixes,coretypes,inits, learningrates, nsamples]
 short_key = False
@@ -293,7 +293,7 @@ for config in tqdm.tqdm(all_config,total=config_count):
             qdict[config] = tn.packmps("q", q, sess=sess)    
 #train_writer.close()
 save_name = folder + config_full_name + '_grandseq.pkl'
-meta = {'name': save_name, 'X': X, 'predmf': predmf, 'Zmf': Zmf, 'mask': mask, 'predictionmask': predictionmask, 
+meta = {'name': save_name, 'X': X, 'bounds': bounds, 'predmf': predmf, 'Zmf': Zmf, 'mask': mask, 'predictionmask': predictionmask, 
         'N': N, 'K': K, 'Ntest': Ntest, 'factors': factors, 'factor_names': factor_names, 'config_count': config_count,
         'random_restarts': random_restarts, 'optimizer': optimizer, 'decay': decay, 'concentration': concentration}
 supdict = {'meta': meta, 'df_c':df_c, 'q': qdict}#, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers], 'checkpoints': [initializer.checkpoints for initializer in initializers]}
