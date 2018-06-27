@@ -293,9 +293,10 @@ for config in tqdm.tqdm(all_config,total=config_count):
             qdict[config] = tn.packmps("q", q, sess=sess)    
 #train_writer.close()
 save_name = folder + config_full_name + '_grandseq.pkl'
-meta = {'name': save_name, 'X': X, 'bounds': bounds, 'predmf': predmf, 'Zmf': Zmf, 'mask': mask, 'predictionmask': predictionmask, 
-        'N': N, 'K': K, 'Ntest': Ntest, 'factors': factors, 'factor_names': factor_names, 'config_count': config_count,
-        'random_restarts': random_restarts, 'optimizer': optimizer, 'decay': decay, 'concentration': concentration}
-supdict = {'meta': meta, 'df_c':df_c, 'q': qdict}#, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers], 'checkpoints': [initializer.checkpoints for initializer in initializers]}
+data = {'X': X, 'mask': mask, 'predictionmask': predictionmask}
+baseline = {'bounds': bounds, 'predmf': predmf, 'Zmf': Zmf}
+configdict = {'factors': factors, 'factor_names': factor_names, 'config_count': config_count}
+meta = {'name': save_name, 'N': N, 'K': K, 'Ntest': Ntest, 'random_restarts': random_restarts, 'optimizer': optimizer, 'decay': decay, 'concentration': concentration}
+supdict = {'meta': meta, 'data': data, 'baseline': baseline, 'df_c':df_c, 'q': qdict, 'config': configdict}#, 'init_checkpoints': [initializer.init_checkpoints for initializer in initializers], 'checkpoints': [initializer.checkpoints for initializer in initializers]}
 with open(folder + config_full_name + '_grandseq.pkl','wb') as handle:
     pickle.dump(supdict, handle, protocol=pickle.HIGHEST_PROTOCOL)
