@@ -88,7 +88,7 @@ class OrthogonalMatrix:
         else:
             initial = tf.random_normal((N, N),dtype=dtype)
         self._var = tf.Variable(initial)
-        self.V = self._var/tf.sqrt(tf.reduce_sum(tf.square(self._var),
+        self.V = self._var/tf.sqrt(1e-10+tf.reduce_sum(tf.square(self._var),
                                                  axis=1, keepdims=True))
         self.neg_matrix = HouseholderChain(self.V)
 
@@ -750,11 +750,11 @@ class MPS:
     def covariance(self, nsamples=100000, blockgroup=True, scale=False):
         z = self.sample(nsamples)
         if blockgroup:
-            z = tf.reshape(z, (z.shape[0], -1))
-            m = tf.reshape(self.marginals(), (-1,1))
-        else:
             z = tf.reshape(tf.transpose(z,[0,2,1]), (z.shape[0], -1))
             m = tf.reshape(tf.transpose(self.marginals()), (-1,1))  
+        else:
+            z = tf.reshape(z, (z.shape[0], -1))
+            m = tf.reshape(self.marginals(), (-1,1))
         cov =  tf.matmul(z, z, transpose_a=True)/nsamples - m*tf.transpose(m)
         if scale:
             var = m*(1.-m)

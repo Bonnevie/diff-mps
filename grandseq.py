@@ -27,7 +27,7 @@ X = adjacency_matrix(karate).toarray().astype('float64')
 N = 34
 X = X[:N,:N]
 
-factor_code = ['R','S','L','M','U','C','A','B']
+factor_code = ['R','S','L','M','U','C','I','A','B']
 factor_names = ['rank','restarts','objective','marginal','unimix','coretype','init','learningrate','nsample']
 factors = [maxranks, range(random_restarts), objectives, marginals, unimixes,coretypes,inits, learningrates, nsamples]
 short_key = False
@@ -270,7 +270,7 @@ for config in tqdm.tqdm(all_config,total=config_count):
             var_reset += [increment_decay_stage_op]
             init = tf.global_variables_initializer()
             randomize = cores.randomize_op()
-            sess.graph.finalize()
+            #sess.graph.finalize()
             sess.run(init)
             sess.run(var_reset)
             sess.run(randomize)
