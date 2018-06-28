@@ -88,8 +88,9 @@ class OrthogonalMatrix:
         else:
             initial = tf.random_normal((N, N),dtype=dtype)
         self._var = tf.Variable(initial)
-        self.V = self._var/tf.sqrt(1e-10+tf.reduce_sum(tf.square(self._var),
+        scales = tf.sqrt(1e-10+tf.reduce_sum(tf.square(self._var),
                                                  axis=1, keepdims=True))
+        self.V = self._var/scales
         self.neg_matrix = HouseholderChain(self.V)
 
     def dot(self, A, left_product=True):
@@ -1523,7 +1524,7 @@ class SwapInvariant(Core):
         assert(ranks[0] == 1 & ranks[-1] == 1)
         
         def involute2(a,b):
-            return tf.stack([[a, b],[(tf.convert_to_tensor(1., dtype=dtype)-tf.square(a))/b, -a]])
+            return tf.stack([[a, epsilon+b],[(tf.convert_to_tensor(1., dtype=dtype)-tf.square(a))/(epsilon+b), -a]])
         
         self.A = [tf.Variable(0.5*tf.ones((rank/2,), dtype=dtype), dtype=dtype) for rank in self.ranks[1:-1]] 
         self.B = [tf.Variable(0.5*tf.ones((rank/2), dtype=dtype), dtype=dtype) for rank in self.ranks[1:-1]] 
@@ -1537,7 +1538,7 @@ class SwapInvariant(Core):
                        in zip(self.ranks[:-1], self.ranks[1:])]
         self.involutes = []
         for A, B, U in zip(self.A, self.B, self.U):
-            subinvolutes = [involute2(a,b) for a,b in zip(tf.unstack(A),tf.unstack(B))]
+            subinvolutes = [involute2(a,tf.nn.softplus(b)) for a,b in zip(tf.unstack(A),tf.unstack(B))]
             M = subinvolutes[0]
             for subinvolute in subinvolutes[1:]:
                 top = tf.pad(M, [[0,0],[0,2]])
