@@ -185,8 +185,8 @@ def buildq(config, logp, predlogp, decay_stage, Z, bounds):
     elif init is 'rank1_best':
         Zbest = Z[np.argsort([np.mean(x) for x in predmf])[-20:]]
         mode_loss = tf.reduce_sum(tn.lognorm_rank1(q, tf.nn.softmax(Zbest)))
-    elif init is 'rank1_diverse':
-        Zbest = Z[np.argsort([np.mean(x) for x in predmf])[-20:]]
+    elif init is 'rank1_bestelbo':
+        Zbest = Z[np.argsort(bounds)[-20:]]
         mode_loss = tf.reduce_sum(tn.lognorm_rank1(q, tf.nn.softmax(Zbest)))
     elif init is 'entropy':
         mode_loss = -margentropy
@@ -195,6 +195,9 @@ def buildq(config, logp, predlogp, decay_stage, Z, bounds):
     elif init is 'expectation_best':
         Z = Z[np.argsort([np.mean(x) for x in predmf])[-20:]]
         mode_loss = -tf.reduce_sum(tf.log(q.batch_contraction(tf.nn.softmax(Z))))
+    elif init is 'expectation_bestelbo':
+        Zbest = Z[np.argsort(bounds)[-20:]]
+        mode_loss = -tf.reduce_sum(tf.log(q.batch_contraction(tf.nn.softmax(Zbest))))
     init_opt = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=q.params(),method='CG',options={'maxiter':30})
             
     
