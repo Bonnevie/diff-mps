@@ -20,7 +20,7 @@ from AMSGrad.optimizers import AMSGrad as amsgrad
 
 from networkx import karate_club_graph, adjacency_matrix
 
-from grandseqmeta import *
+from grandseqmeta_reruns import *
 
 karate = karate_club_graph()
 X = adjacency_matrix(karate).toarray().astype('float64')
@@ -198,7 +198,7 @@ def buildq(config, logp, predlogp, decay_stage, Z, bounds):
     elif init is 'expectation_bestelbo':
         Zbest = Z[np.argsort(bounds)[-20:]]
         mode_loss = -tf.reduce_sum(tf.log(q.batch_contraction(tf.nn.softmax(Zbest))))
-    init_opt = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=q.params(),method='CG',options={'maxiter':30})
+    init_opt = tf.contrib.opt.ScipyOptimizerInterface(mode_loss, var_list=q.params(),method='CG',options={'maxiter':1500})
             
     
     #step = stepper.apply_gradients(var_grad)
