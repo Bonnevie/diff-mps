@@ -123,7 +123,7 @@ class CollapsedMultipartite(CollapsedMixture):
         return np.reshape(Zstar_vec, shape)
 
 class CollapsedStochasticBlock(CollapsedMixture):
-    def __init__(self, N, K, alpha=1., a=1., b=1.):
+    def __init__(self, N, K, alpha=1., a=1., b=1.): 
         super().__init__(N, K)
         self.alpha = tf.convert_to_tensor(alpha, dtype=dtype)
         self.a = tf.convert_to_tensor(a, dtype=dtype)
@@ -132,27 +132,28 @@ class CollapsedStochasticBlock(CollapsedMixture):
 
     @tfmethod(2)
     def logp(self, Z, X, observed=None):
-        #unpack from singleton list
-        if len(Z.shape)==3:
+        # unpack from singleton list
+        if len(Z.shape) == 3:
             Z = Z[0]
 
         if observed is None:
             observed = tf.convert_to_tensor(np.triu(np.ones((self.N, self.N), dtype=dtype), 1))
-
+        tril = np.tril(np.ones((self.K, self.K)), -1)
+        triu = np.triu(np.ones((self.K, self.K)))
         membership = tf.reduce_sum(Z, axis=0, keepdims=True)
-        edgecounts = tf.einsum('mk,mn,nl', Z, observed*X, Z) #Z^T*X*Z
+        edgecounts = tf.einsum('mk,mn,nl', Z, observed * X, Z)  # Z^T*X*Z
         notedgecounts = tf.einsum('mk,mn,nl', Z, observed, Z) - edgecounts
+        edgecounts = (triu * edgecounts + tf.transpose(tril * edgecounts))
+        notedgecounts = (triu * notedgecounts + tf.transpose(tril * notedgecounts))
 
-        lnprior = tf.reduce_sum(tf.lbeta((self.alpha +
-                                                      membership)) -
-                                tf.lbeta((self.alpha +
-                                                      tf.zeros_like(membership))))
-        lnlink = tf.reduce_sum(tf.lbeta(tf.stack([self.a + edgecounts,
-                                                  self.b + notedgecounts],
-                                                  axis=2)) -
-                               tf.lbeta(tf.stack([self.a + tf.zeros_like(edgecounts),
-                                                  self.b + tf.zeros_like(notedgecounts)],
-                                                  axis=2)))
+        lnprior = tf.reduce_sum(tf.lbeta((self.alpha + membership)) -
+                                tf.lbeta((self.alpha + tf.zeros_like(membership))))
+        lnlink = tf.reduce_sum(triu * tf.lbeta(tf.stack([self.a + edgecounts,
+                                                         self.b + notedgecounts],
+                                                        axis=2)) -
+                               triu * tf.lbeta(tf.stack([self.a + tf.zeros_like(edgecounts),
+                                                         self.b + tf.zeros_like(notedgecounts)],
+                                                        axis=2)))
         return lnprior + lnlink
 
     def sample(self):
@@ -179,6 +180,25 @@ class CollapsedStochasticBlock(CollapsedMixture):
             observed = self._defaultobserved
         else:
             observed = tf.convert_to_tensor(observed, dtype)
+
+        tril = np.tril(np.ones((1, self.K, self.K)), -1)
+        triu = np.triu(np.ones((1, self.K, self.K)))
+        membership = tf.reduce_sum(Z, axis=1, keepdims=True)
+        edgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed * X, Z)  # Z^T*X*Z
+        notedgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed, Z) - edgecounts
+        edgecounts = (triu * edgecounts + tf.transpose(tril * edgecounts, [0,2,1]))
+        notedgecounts = (triu * notedgecounts + tf.transpose(tril * notedgecounts, [0,2,1]))
+
+        lnprior = tf.squeeze(tf.lbeta((self.alpha + membership)) -
+                                tf.lbeta((self.alpha + tf.zeros_like(membership))))
+        lnlink = tf.reduce_sum(triu * tf.lbeta(tf.stack([self.a + edgecounts,
+                                                         self.b + notedgecounts],
+                                                        axis=3)) -
+                               triu * tf.lbeta(tf.stack([self.a + tf.zeros_like(edgecounts),
+                                                         self.b + tf.zeros_like(notedgecounts)],
+                                                        axis=3)), axis=[1,2])
+        return lnprior + lnlink
+        """
         membership = tf.reduce_sum(Z, axis=1, keepdims=True)
         edgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed*X, Z) #Z^T*X*Z
         notedgecounts = tf.einsum('bmk,mn,bnl->bkl', Z, observed, Z) - edgecounts
@@ -193,6 +213,7 @@ class CollapsedStochasticBlock(CollapsedMixture):
                                                   self.b + tf.zeros_like(notedgecounts)],
                                                   axis=3)), axis=[1,2])
         return lnprior + lnlink
+        """
 
 
     @tfmethod(4)

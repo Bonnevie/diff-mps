@@ -809,15 +809,16 @@ class MPS:
             marginalentropy = -tf.reduce_sum(marginals * tf.log(epsilon+marginals))
             marginalcv = (marginalentropy +
                           tf.reduce_sum(samples *
-                                        tf.log(epsilon+marginals)[None, :, :],
+                                        tf.log(epsilon+marginals)[None, :, :],  
                                         axis=[1, 2]))
         else:
+            marginalentropy = 0.
             marginalcv = 0.
         entropy = -tf.log(epsilon+self.batch_contraction(samples))
         elbo = llk + entropy + cvweight*marginalcv
         objective = llk + invtemp*(entropy + cvweight*marginalcv)
         if report:
-            return (objective, elbo, llk, entropy, marginalentropy, marginalcv)
+            return (elbo, llk, entropy)
         else:
             return elbo
 

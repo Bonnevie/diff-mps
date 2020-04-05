@@ -2,8 +2,6 @@ import numpy as np
 import tensorflow as tf
 sess = tf.Session()
 import pickle
-from relaxflow.reparam import CategoricalReparam
-import time
 dtype = 'float64'
 
 import time
@@ -17,15 +15,32 @@ import tensornets as tn
 from itertools import product
 
 from AMSGrad.optimizers import AMSGrad as amsgrad
+from AdaBound import AdaBoundOptimizer
 
 from networkx import karate_club_graph, adjacency_matrix
 
 from grandseqmeta_reruns import *
 
-karate = karate_club_graph()
-X = adjacency_matrix(karate).toarray().astype('float64')
-N = 34
-X = X[:N,:N]
+if network == 'karate':
+    karate = karate_club_graph()
+    X = adjacency_matrix(karate).toarray().astype('float64')
+    if with_leaders:
+        N = 34
+        X = X[:N,:N]
+    else:
+        N = 29
+        X = X[3:-2, 3:-2]
+elif network == 'ambigraph':
+    np.random.seed(704)
+    Ncom = 10
+    N = 4 * Ncom
+    grades = [0.2, 0.5, 0.8]
+    group1 = [0,0,1,1]
+    group2 = [0,1,0,1]
+    Z1 = np.concatenate([np.tile(np.eye(2)[g], (Ncom, 1)) for g in group1])
+    Z2 = np.concatenate([np.tile(np.eye(2)[g], (Ncom, 1)) for g in group2])
+    strengths = np.array([[grades[(group1[i] == group1[j]) + (group2[i] == group2[j])] for j in range(4)] for i in range(4)])
+    X = np.triu(np.block([[np.random.rand(Ncom, Ncom) <= strengths[i,j] for j in range(4)] for i in range(4)]), 1).astype(dtype)
 
 factor_code = ['R','S','L','M','U','C','I','A','B']
 factor_names = ['rank','restarts','objective','marginal','unimix','coretype','init','learningrate','nsample']
@@ -37,10 +52,7 @@ config_count = np.prod([len(factor) for factor in factors])
 config_full_name = ''.join([code + '-'.join([str(fact) for fact in factor]) for code, factor in zip(factor_code, factors)])
 copy_writer = []
         
-np.random.seed(1)
-#tf.reset_default_graph()
-
-
+np.random.seed(seed)
 
 #generate mask of observed edges
 mask = np.random.randn(N,N) + np.triu(np.inf*np.ones(N))
@@ -53,9 +65,9 @@ mask = mask.astype(dtype)
 predictionmask = predictionmask.astype(dtype)
 
 concentration = 1.
-a = 1. + (concentration-1.)*np.eye(K)
-b = concentration - (concentration-1.)*np.eye(K) 
-
+a = a * (1. + (concentration-1.)*np.eye(K))
+b = b * (concentration - (concentration-1.)*np.eye(K))
+print("parameters", a, b)
 q = {}
 cores = {}
 loss = {}
@@ -134,6 +146,14 @@ def buildq(config, logp, predlogp, decay_stage, Z, bounds):
 
         stepper = amsgrad(learning_rate=learningrate, beta1=beta1, beta2=beta2, epsilon=epsilon)
         var_stepper = amsgrad(learning_rate=learningrate, beta1=beta1, beta2=beta2, epsilon=epsilon)
+    elif optimizer == 'adabound':
+        beta1 = tf.Variable(0.9, dtype='float64', trainable=False)
+        beta2 = tf.Variable(0.999, dtype='float64', trainable=False)
+
+        stepper = AdaBoundOptimizer(learning_rate=learningrate, final_lr=learningrate, beta1=beta1, beta2=beta2, amsbound=False)
+    elif optimizer == "sgd":
+        stepper = tf.train.MomentumOptimizer(learningrate, 0.)
+    print("using", stepper)
     control_samples = q.shadowrelax(nsample)
     
     elbo = lambda sample: -q.elbo(sample, logp, marginal=marginal)
@@ -210,11 +230,16 @@ def buildq(config, logp, predlogp, decay_stage, Z, bounds):
     else:
         var_step = tf.no_op()
 
+    gradnorm = tf.sqrt(tf.reduce_sum([tf.linalg.norm(g)**2 for g, var in grad if g is not None]))
+    gs, vars = zip(*grad)
+    gs, _ = tf.clip_by_global_norm(gs, 25, gradnorm)
+    grad = list(zip(gs, vars))
+
     step = stepper.apply_gradients(grad)
 
     update = tf.group([step, var_step])
     
-    return (configok, q, cores, update, loss, predloss, margentropy, init_opt, var_reset)
+    return (configok, q, cores, update, loss, predloss, margentropy, init_opt, var_reset, learningrate, gradnorm)
         
     
 #var_reset += [tf.assign(decay_stage, 0)]
@@ -234,7 +259,7 @@ def buildq(config, logp, predlogp, decay_stage, Z, bounds):
 # init = tf.global_variables_initializer()
 
 #run all configurations
-column_names = ['loss', 'predloss', 'margentropy', 'time']
+column_names = ['loss', 'predloss', 'margentropy', 'gradnorm', 'time']
 
 index_c = pd.MultiIndex.from_product(factors + [range(nsteps)], names=factor_names + ['iteration'])
 df_c = pd.DataFrame(index=index_c, columns=column_names)
@@ -263,11 +288,11 @@ for config in tqdm.tqdm(all_config,total=config_count):
     tf.reset_default_graph()
     with tf.Session() as sess:        
         tf.set_random_seed(config[1])
-        p = CollapsedStochasticBlock(N, K, alpha=1, a=a, b=b)
+        p = CollapsedStochasticBlock(N, K, alpha=alpha, a=a, b=b)
         logp = lambda sample: p.batch_logp(sample, X, observed=mask)
         predlogp = lambda sample: p.batch_logpred(sample, X, predict=predictionmask, observed=mask)
         decay_stage = tf.Variable(1, name='decay_stage', trainable=False, dtype=tf.int32)
-        configok, q, cores, update, loss, predloss, margentropy, init_opt, var_reset = buildq(config, logp, predlogp, decay_stage, Zmf, bounds)            
+        configok, q, cores, update, loss, predloss, margentropy, init_opt, var_reset, learningrate, gradnorm = buildq(config, logp, predlogp, decay_stage, Zmf, bounds)
         if configok:    
             increment_decay_stage_op = tf.assign(decay_stage, decay_stage+1)
             var_reset += [increment_decay_stage_op]
@@ -279,18 +304,20 @@ for config in tqdm.tqdm(all_config,total=config_count):
             sess.run(randomize)
             configc = config + (0,)
             init_opt.minimize()
-            lossit, predlossit,entit = sess.run([loss, predloss,margentropy])
+            lossit, predlossit,entit, gradnormit = sess.run([loss, predloss,margentropy, gradnorm])
             df_c.loc[configc, 'loss'] = lossit
             df_c.loc[configc, 'predloss'] = predlossit    
             df_c.loc[configc, 'margentropy'] = entit
+            df_c.loc[configc, 'gradnorm'] = gradnormit
             df_c.loc[configc, 'time'] = 0.
             t0 = time.time()
             for it in tqdm.trange(1,nsteps):
                 configc = config + (it,)
-                _, lossit, predlossit,entit = sess.run([update, loss, predloss,margentropy])
+                _, lossit, predlossit,entit, gradnormit = sess.run([update, loss, predloss,margentropy, gradnorm])
                 df_c.loc[configc, 'loss'] = lossit
                 df_c.loc[configc, 'predloss'] = predlossit
                 df_c.loc[configc, 'margentropy'] = entit
+                df_c.loc[configc, 'gradnorm'] = gradnormit
                 df_c.loc[configc, 'time'] = time.time() - t0
                 sess.run(increment_decay_stage_op)
             qdict[config] = tn.packmps("q", q, sess=sess)    
